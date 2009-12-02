@@ -402,7 +402,7 @@ code_hash(PyCodeObject *co)
 	if (h0 == -1) return -1;
 	h1 = PyObject_Hash(co->co_code);
 	if (h1 == -1) return -1;
-	h2 = PyObject_Hash(co->co_consts);
+	h2 = _Py_object_relaxed_hash(co->co_consts);
 	if (h2 == -1) return -1;
 	h3 = PyObject_Hash(co->co_names);
 	if (h3 == -1) return -1;
@@ -460,6 +460,31 @@ PyTypeObject PyCode_Type = {
 	0,				/* tp_alloc */
 	code_new,			/* tp_new */
 };
+
+/* Defined for compile.c in wordcode-based Pythons */
+
+int
+_Py_code_strict_equal(PyCodeObject *co, PyCodeObject *cp)
+{
+	int cmp;
+	cmp = _Py_object_strict_equal(co->co_name, cp->co_name);
+	if (cmp <= 0) return cmp;
+	if (co->co_argcount != cp->co_argcount) return 0;
+	if (co->co_nlocals != cp->co_nlocals) return 0;
+	if (co->co_flags != cp->co_flags) return 0;
+	if (co->co_firstlineno != cp->co_firstlineno) return 0;
+	cmp = _Py_object_strict_equal(co->co_code, cp->co_code);
+	if (cmp <= 0) return cmp;
+	cmp = _Py_object_strict_equal(co->co_consts, cp->co_consts);
+	if (cmp <= 0) return cmp;
+	cmp = _Py_object_strict_equal(co->co_names, cp->co_names);
+	if (cmp <= 0) return cmp;
+	cmp = _Py_object_strict_equal(co->co_varnames, cp->co_varnames);
+	if (cmp <= 0) return cmp;
+	cmp = _Py_object_strict_equal(co->co_freevars, cp->co_freevars);
+	if (cmp <= 0) return cmp;
+	return _Py_object_strict_equal(co->co_cellvars, cp->co_cellvars);
+}
 
 /* All about c_lnotab.
 

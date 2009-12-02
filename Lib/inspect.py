@@ -740,6 +740,8 @@ def getargs(co):
 
     nargs = co.co_argcount
     names = co.co_varnames
+    code = co.co_code
+    codelen = len(code)
     args = list(names[:nargs])
     step = 0
 
@@ -747,13 +749,15 @@ def getargs(co):
     for i in range(nargs):
         if args[i][:1] in ('', '.'):
             stack, remain, count = [], [], []
-            while step < len(co.co_code):
-                op = ord(co.co_code[step])
-                step = step + 1
+            while step < codelen:
+                op = ord(code[step])
+                oparg = ord(code[step + 1])
+                step += 2
                 if op >= dis.HAVE_ARGUMENT:
+                    op, value, size = dis.get_extended_opcode(code, step,
+                                                              op, oparg)
+                    step += size + size
                     opname = dis.opname[op]
-                    value = ord(co.co_code[step]) + ord(co.co_code[step+1])*256
-                    step = step + 2
                     if opname in ('UNPACK_TUPLE', 'UNPACK_SEQUENCE'):
                         remain.append(value)
                         count.append(value)

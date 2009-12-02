@@ -26,7 +26,7 @@ class TestTranforms(unittest.TestCase):
         asm = disassemble(unot)
         for elem in ('UNARY_NOT', 'JUMP_IF_FALSE'):
             self.assert_(elem not in asm)
-        for elem in ('JUMP_IF_TRUE', 'POP_TOP'):
+        for elem in ('JUMP_IF_TRUE', ):
             self.assert_(elem in asm)
 
     def test_elim_inversion_of_is_or_in(self):
@@ -47,12 +47,11 @@ class TestTranforms(unittest.TestCase):
         asm = disassemble(f)
         for elem in ('LOAD_GLOBAL',):
             self.assert_(elem not in asm)
-        for elem in ('LOAD_CONST', '(None)'):
-            self.assert_(elem in asm)
         def f():
             'Adding a docstring made this test fail in Py2.5.0'
-            return None
-        self.assert_('LOAD_CONST' in disassemble(f))
+            a = None
+            return a
+        self.assert_('MOVE_CONST_FAST' in disassemble(f))
         self.assert_('LOAD_GLOBAL' not in disassemble(f))
 
     def test_while_one(self):
@@ -69,7 +68,7 @@ class TestTranforms(unittest.TestCase):
 
     def test_pack_unpack(self):
         for line, elem in (
-            ('a, = a,', 'LOAD_CONST',),
+            ('a, = a,', 'RETURN_CONST',),
             ('a, b = a, b', 'ROT_TWO',),
             ('a, b, c = a, b, c', 'ROT_THREE',),
             ):
@@ -136,7 +135,7 @@ class TestTranforms(unittest.TestCase):
 
         # Verify that large sequences do not result from folding
         asm = dis_single('a="x"*1000')
-        self.assert_('(1000)' in asm)
+        self.assert_('* 1000' in asm)
 
     def test_folding_of_unaryops_on_constants(self):
         for line, elem in (
@@ -189,7 +188,7 @@ class TestTranforms(unittest.TestCase):
         asm = disassemble(f)
         self.assert_('JUMP_FORWARD' not in asm)
         self.assert_('JUMP_ABSOLUTE' not in asm)
-        self.assertEqual(asm.split().count('RETURN_VALUE'), 6)
+        self.assertEqual(asm.split().count('RETURN_CONST'), 5)
 
     def test_elim_jump_after_return2(self):
         # Eliminate dead code: jumps immediately after returns can't be reached
@@ -200,7 +199,51 @@ class TestTranforms(unittest.TestCase):
         self.assert_('JUMP_FORWARD' not in asm)
         # There should be one jump for the while loop.
         self.assertEqual(asm.split().count('JUMP_ABSOLUTE'), 1)
-        self.assertEqual(asm.split().count('RETURN_VALUE'), 2)
+        self.assertEqual(asm.split().count('RETURN_CONST'), 1)
+
+    def test_elim_code_after_raise(self):
+        # Eliminate dead code: jumps and end_finally
+        # immediately after raise can't be reached
+        def f():
+            try:
+                a = 1; a / 0
+            except:
+                raise
+        asm = disassemble(f)
+        self.assert_('END_FINALLY' not in asm)
+        self.assertEqual(asm.split().count('JUMP_FORWARD'), 1)
+
+    def test_elim_code_after_break(self):
+        # Eliminate dead code: jumps immediately after break can't be reached
+        def f(x):
+            while 1:
+                if x:
+                    break
+        asm = disassemble(f)
+        self.assertEqual(asm.split().count('JUMP_ABSOLUTE'), 1)
+
+    def test_elim_code_after_continue(self):
+        # Eliminate dead code: jumps immediately after break can't be reached
+        def f(x):
+            while 1:
+                if x:
+                    continue
+        asm = disassemble(f)
+        self.assertEqual(asm.split().count('JUMP_ABSOLUTE'), 2)
+
+    def test_return_const(self):
+        # LOAD_CONST RETURN_VALUE  -->  RETURN_CONST
+        def f():
+            return 5
+        self.assert_('RETURN_CONST' in disassemble(f))
+
+    def test_call_procedure(self):
+        # CALL_FUNCTION POP_TOP  -->  CALL_PROCEDURE
+        def f():
+            def g(): pass
+            g()
+            x
+        self.assert_('CALL_PROCEDURE' in disassemble(f))
 
 
 def test_main(verbose=None):

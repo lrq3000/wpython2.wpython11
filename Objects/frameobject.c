@@ -68,7 +68,7 @@ frame_setlineno(PyFrameObject *f, PyObject* p_new_lineno)
 	int new_lineno = 0;		/* The new value of f_lineno */
 	int new_lasti = 0;		/* The new value of f_lasti */
 	int new_iblock = 0;		/* The new value of f_iblock */
-	unsigned char *code = NULL;	/* The bytecode for the frame... */
+	unsigned short *code = NULL;	/* The bytecode for the frame... */
 	Py_ssize_t code_len = 0;	/* ...and its length */
 	unsigned char *lnotab = NULL;	/* Iterating over co_lnotab */
 	Py_ssize_t lnotab_len = 0;	/* (ditto) */
@@ -85,7 +85,22 @@ frame_setlineno(PyFrameObject *f, PyObject* p_new_lineno)
 	int blockstack[CO_MAXBLOCKS];	/* Walking the 'finally' blocks */
 	int in_finally[CO_MAXBLOCKS];	/* (ditto) */
 	int blockstack_top = 0;		/* (ditto) */
-	unsigned char setup_op = 0;	/* (ditto) */
+	int temp_for_addr_stack[CO_MAXBLOCKS];	/* Temporary target address of
+                                               for blocks (no setup) */
+	int temp_block_type_stack[CO_MAXBLOCKS];	/* Temporary block kind
+                                                   (0 = setup, 1 = for) */
+	int temp_for_addr_top = 0;		    /* (ditto) */
+	int temp_last_for_addr = -1;        /* (ditto) */
+	int temp_block_type_top = 0;	    /* (ditto) */
+	int for_addr_stack[CO_MAXBLOCKS];	/* Target address of for blocks
+                                           (no setup) */
+	int block_type_stack[CO_MAXBLOCKS];	/* Block kind (0 = setup, 1 = for) */
+	int for_addr_top;		        /* (ditto) */
+	int last_for_addr;	            /* (ditto) */
+	int block_type_top;	            /* (ditto) */
+	unsigned short setup_op = 0;	/* (ditto) */
+	unsigned short op;
+    int oparg, target_addr;
 	char *tmp;
 
 	/* f_lineno must be an integer. */
@@ -141,6 +156,7 @@ frame_setlineno(PyFrameObject *f, PyObject* p_new_lineno)
 
 	/* We're now ready to look at the bytecode. */
 	PyString_AsStringAndSize(f->f_code->co_code, (char **)&code, &code_len);
+	code_len >>= 1;
 	min_addr = MIN(new_lasti, f->f_lasti);
 	max_addr = MAX(new_lasti, f->f_lasti);
 
@@ -154,7 +170,8 @@ frame_setlineno(PyFrameObject *f, PyObject* p_new_lineno)
 	 * cases (AFAIK) where a line's code can start with DUP_TOP or
 	 * POP_TOP, but if any ever appear, they'll be subject to the same
 	 * restriction (but with a different error message). */
-	if (code[new_lasti] == DUP_TOP || code[new_lasti] == POP_TOP) {
+	if (code[new_lasti] == CONVERT(DUP_TOP) ||
+        code[new_lasti] == CONVERT(POP_TOP)) {
 		PyErr_SetString(PyExc_ValueError,
 		    "can't jump to 'except' line as there's no exception");
 		return -1;
@@ -175,38 +192,102 @@ frame_setlineno(PyFrameObject *f, PyObject* p_new_lineno)
 	memset(in_finally, '\0', sizeof(in_finally));
 	blockstack_top = 0;
 	for (addr = 0; addr < code_len; addr++) {
-		unsigned char op = code[addr];
+        if (addr == min_addr) { /* Takes a snapshot of the for blocks status */
+            memcpy(for_addr_stack, temp_for_addr_stack,
+                sizeof(int) * temp_for_addr_top);
+            memcpy(block_type_stack, temp_block_type_stack,
+                sizeof(int) * temp_for_addr_top);
+            for_addr_top = temp_for_addr_top;
+            last_for_addr = temp_last_for_addr;
+            block_type_top = temp_block_type_top;
+        }
+        /* Checks if we have found a "virtual" POP_BLOCK/POP_TOP for the
+           current for instruction (without SETUP_LOOP). */
+        if (addr == temp_last_for_addr) {
+            temp_last_for_addr = temp_for_addr_stack[--temp_for_addr_top];
+            temp_block_type_top--;
+        }
+		op = code[addr];
 		switch (op) {
-		case SETUP_LOOP:
-		case SETUP_EXCEPT:
-		case SETUP_FINALLY:
+		case CONVERT(EXT16(SETUP_LOOP)):
+		case CONVERT(EXT16(SETUP_EXCEPT)):
+		case CONVERT(EXT16(SETUP_FINALLY)):
+		case CONVERT(EXT32(SETUP_LOOP)):
+		case CONVERT(EXT32(SETUP_EXCEPT)):
+		case CONVERT(EXT32(SETUP_FINALLY)):
 			blockstack[blockstack_top++] = addr;
 			in_finally[blockstack_top-1] = 0;
+			temp_block_type_stack[temp_block_type_top++] = 0;
 			break;
 
-		case POP_BLOCK:
+		case CONVERT(EXT16(FOR_ITER)):
+            oparg = code[addr + 1];
+            target_addr = addr + 2 + CONVERT(oparg);
+            if (code[target_addr] != CONVERT(POP_FOR_BLOCK)) {
+                temp_for_addr_stack[temp_for_addr_top++] = temp_last_for_addr;
+                temp_last_for_addr = target_addr;
+    			temp_block_type_stack[temp_block_type_top++] = 1;
+            }
+			break;
+
+		case CONVERT(EXT32(FOR_ITER)):
+            oparg = code[addr + 1];
+            target_addr = addr + 3 + CONVERT(oparg);
+            oparg = code[addr + 2];
+            target_addr += CONVERT(oparg) << 16;
+            if (code[target_addr] != CONVERT(POP_FOR_BLOCK)) {
+                temp_for_addr_stack[temp_for_addr_top++] = temp_last_for_addr;
+                temp_last_for_addr = target_addr;
+    			temp_block_type_stack[temp_block_type_top++] = 1;
+            }
+			break;
+
+		case CONVERT(POP_BLOCK):
+		case CONVERT(POP_FOR_BLOCK):
 			assert(blockstack_top > 0);
 			setup_op = code[blockstack[blockstack_top-1]];
-			if (setup_op == SETUP_FINALLY) {
+			if (MATCHOP(setup_op, SETUP_FINALLY)) {
 				in_finally[blockstack_top-1] = 1;
 			}
 			else {
 				blockstack_top--;
+                temp_block_type_top--;
 			}
 			break;
 
-		case END_FINALLY:
+		case CONVERT(END_FINALLY):
 			/* Ignore END_FINALLYs for SETUP_EXCEPTs - they exist
 			 * in the bytecode but don't correspond to an actual
 			 * 'finally' block.  (If blockstack_top is 0, we must
 			 * be seeing such an END_FINALLY.) */
 			if (blockstack_top > 0) {
 				setup_op = code[blockstack[blockstack_top-1]];
-				if (setup_op == SETUP_FINALLY) {
+				if (MATCHOP(setup_op, SETUP_FINALLY)) {
 					blockstack_top--;
+			        temp_for_addr_top--;
+                    temp_block_type_top--;
 				}
 			}
 			break;
+		default:
+			switch (EXTRACTOP(op)) {
+				case SETUP_LOOP:
+				case SETUP_EXCEPT:
+				case SETUP_FINALLY:
+					blockstack[blockstack_top++] = addr;
+					in_finally[blockstack_top-1] = 0;
+           			temp_block_type_stack[temp_block_type_top++] = 0;
+					break;
+				case FOR_ITER:
+                    target_addr = addr + 1 + EXTRACTARG(op);
+                    if (code[target_addr] != CONVERT(POP_FOR_BLOCK)) {
+                        temp_for_addr_stack[temp_for_addr_top++] =
+                            temp_last_for_addr;
+                        temp_last_for_addr = target_addr;
+            			temp_block_type_stack[temp_block_type_top++] = 1;
+                    }
+					break;
+			}
 		}
 
 		/* For the addresses we're interested in, see whether they're
@@ -233,9 +314,11 @@ frame_setlineno(PyFrameObject *f, PyObject* p_new_lineno)
 			}
 		}
 
-		if (op >= HAVE_ARGUMENT) {
+		op = EXTRACTOP(op);
+		if (op >= EXTENDED_ARG32)
 			addr += 2;
-		}
+		else if (op >= EXTENDED_ARG16)
+			addr += 1;
 	}
 
 	/* Verify that the blockstack tracking code didn't get lost. */
@@ -257,27 +340,87 @@ frame_setlineno(PyFrameObject *f, PyObject* p_new_lineno)
 	 * By also keeping track of the lowest blockstack position we see, we
 	 * can tell whether the jump goes into any blocks without coming out
 	 * again - in that case we raise an exception below. */
-	delta_iblock = 0;
 	for (addr = min_addr; addr < max_addr; addr++) {
-		unsigned char op = code[addr];
+        if (addr == last_for_addr) {
+            last_for_addr = for_addr_stack[--for_addr_top];
+            block_type_top--;
+            delta_iblock--;
+        }
+		op = code[addr];
 		switch (op) {
-		case SETUP_LOOP:
-		case SETUP_EXCEPT:
-		case SETUP_FINALLY:
-			delta_iblock++;
+		case CONVERT(EXT16(SETUP_LOOP)):
+		case CONVERT(EXT16(SETUP_EXCEPT)):
+		case CONVERT(EXT16(SETUP_FINALLY)):
+		case CONVERT(EXT32(SETUP_LOOP)):
+		case CONVERT(EXT32(SETUP_EXCEPT)):
+		case CONVERT(EXT32(SETUP_FINALLY)):
+			block_type_stack[block_type_top++] = 0;
+            delta_iblock++;
 			break;
 
-		case POP_BLOCK:
-			delta_iblock--;
+		case CONVERT(EXT16(FOR_ITER)):
+            oparg = code[addr + 1];
+            target_addr = addr + 2 + CONVERT(oparg);
+            if (code[target_addr] != CONVERT(POP_FOR_BLOCK)) {
+                for_addr_stack[for_addr_top++] = last_for_addr;
+                last_for_addr = target_addr;
+    			block_type_stack[block_type_top++] = 1;
+                delta_iblock++;
+            }
 			break;
+
+		case CONVERT(EXT32(FOR_ITER)):
+            oparg = code[addr + 1];
+            target_addr = addr + 3 + CONVERT(oparg);
+            oparg = code[addr + 2];
+            target_addr += CONVERT(oparg) << 16;
+            if (code[target_addr] != CONVERT(POP_FOR_BLOCK)) {
+                for_addr_stack[for_addr_top++] = last_for_addr;
+                last_for_addr = target_addr;
+    			block_type_stack[block_type_top++] = 1;
+                delta_iblock++;
+            }
+			break;
+
+        case CONVERT(POP_BLOCK):
+        case CONVERT(POP_FOR_BLOCK):
+			delta_iblock--;
+            block_type_top--;
+			break;
+		default:
+			switch (EXTRACTOP(op)) {
+				case SETUP_LOOP:
+				case SETUP_EXCEPT:
+				case SETUP_FINALLY:
+           			block_type_stack[block_type_top++] = 0;
+                    delta_iblock++;
+					break;
+				case FOR_ITER:
+                    target_addr = addr + 1 + EXTRACTARG(op);
+                    if (code[target_addr] != CONVERT(POP_FOR_BLOCK)) {
+                        for_addr_stack[for_addr_top++] = last_for_addr;
+                        last_for_addr = target_addr;
+            			block_type_stack[block_type_top++] = 1;
+                        delta_iblock++;
+                    }
+					break;
+			}
 		}
 
 		min_delta_iblock = MIN(min_delta_iblock, delta_iblock);
 
-		if (op >= HAVE_ARGUMENT) {
+		op = EXTRACTOP(op);
+		if (op >= EXTENDED_ARG32)
 			addr += 2;
-		}
+		else if (op >= EXTENDED_ARG16)
+			addr += 1;
 	}
+
+    /* Checks if we have a pending FOR_ITER (without SETUP_LOOP). */
+    if (addr == last_for_addr) {
+        delta_iblock--;
+		min_delta_iblock = MIN(min_delta_iblock, delta_iblock);
+    }
 
 	/* Derive the absolute iblock values from the deltas. */
 	min_iblock = f->f_iblock + min_delta_iblock;
@@ -298,13 +441,19 @@ frame_setlineno(PyFrameObject *f, PyObject* p_new_lineno)
 	}
 
 	/* Pop any blocks that we're jumping out of. */
-	while (f->f_iblock > new_iblock) {
-		PyTryBlock *b = &f->f_blockstack[--f->f_iblock];
-		while ((f->f_stacktop - f->f_valuestack) > b->b_level) {
-			PyObject *v = (*--f->f_stacktop);
-			Py_DECREF(v);
-		}
-	}
+	while (f->f_iblock > new_iblock)
+        if (block_type_stack[--block_type_top]){
+		    PyObject *v = (*--f->f_stacktop);
+		    Py_DECREF(v);
+            new_iblock++;
+        }
+        else {
+		    PyTryBlock *b = &f->f_blockstack[--f->f_iblock];
+		    while ((f->f_stacktop - f->f_valuestack) > b->b_level) {
+			    PyObject *v = (*--f->f_stacktop);
+			    Py_DECREF(v);
+		    }
+	    }
 
 	/* Finally set the new f_lineno and f_lasti and return OK. */
 	f->f_lineno = new_lineno;

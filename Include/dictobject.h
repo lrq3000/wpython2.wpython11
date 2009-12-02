@@ -137,6 +137,15 @@ PyAPI_FUNC(PyObject *) PyDict_GetItemString(PyObject *dp, const char *key);
 PyAPI_FUNC(int) PyDict_SetItemString(PyObject *dp, const char *key, PyObject *item);
 PyAPI_FUNC(int) PyDict_DelItemString(PyObject *dp, const char *key);
 
+/* Defined for compile.c in wordcode-based Pythons. */
+
+long _Py_dict_relaxed_hash(PyDictObject *v);
+int _Py_dict_strict_equal(PyDictObject *vd, PyDictObject *wd);
+void _Py_dict_set_strict_lookup(PyObject *dp);
+PyObject *_Py_dict_get_item_with_hash(PyObject *mp, PyObject *key, long hash);
+int _Py_dict_set_item_with_hash(PyObject *op, PyObject *key, PyObject *value, long hash);
+PyObject *_Py_dict_deep_copy(PyObject *);
+
 #ifdef __cplusplus
 }
 #endif

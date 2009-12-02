@@ -35,7 +35,10 @@ SyntaxError: assignment to None (<doctest test.test_syntax[1]>, line 1)
 
 >>> None = 1
 Traceback (most recent call last):
-SyntaxError: assignment to None (<doctest test.test_syntax[2]>, line 1)
+ File "D:\Projects\Python\Python-2.6.1\lib\doctest.py", line 1231, in __run
+   compileflags, 1) in test.globs
+ File "<doctest test.test_syntax[2]>", line 1
+SyntaxError: can't assign to literal (<doctest test.test_syntax[2]>, line 1)
 
 It's a syntax error to assign to the empty tuple.  Why isn't it an
 error to assign to the empty list?  It will always raise some error at
@@ -43,7 +46,10 @@ runtime.
 
 >>> () = 1
 Traceback (most recent call last):
-SyntaxError: can't assign to () (<doctest test.test_syntax[3]>, line 1)
+ File "D:\Projects\Python\Python-2.6.1\lib\doctest.py", line 1231, in __run
+   compileflags, 1) in test.globs
+ File "<doctest test.test_syntax[3]>", line 1
+SyntaxError: can't assign to literal (<doctest test.test_syntax[3]>, line 1)
 
 >>> f() = 1
 Traceback (most recent call last):
@@ -71,7 +77,10 @@ SyntaxError: can't assign to literal (<doctest test.test_syntax[9]>, line 1)
 
 >>> `1` = 1
 Traceback (most recent call last):
-SyntaxError: can't assign to repr (<doctest test.test_syntax[10]>, line 1)
+ File "D:\Projects\Python\Python-2.6.1\lib\doctest.py", line 1231, in __run
+   compileflags, 1) in test.globs
+ File "<doctest test.test_syntax[10]>", line 1
+SyntaxError: can't assign to literal (<doctest test.test_syntax[10]>, line 1)
 
 If the left-hand side of an assignment is a list or tuple, an illegal
 expression inside that contain should still cause a syntax error.
@@ -231,7 +240,10 @@ Traceback (most recent call last):
 SyntaxError: augmented assignment to generator expression not possible (<doctest test.test_syntax[31]>, line 1)
 >>> None += 1
 Traceback (most recent call last):
-SyntaxError: assignment to None (<doctest test.test_syntax[32]>, line 1)
+ File "D:\Projects\Python\Python-2.6.1\lib\doctest.py", line 1231, in __run
+   compileflags, 1) in test.globs
+ File "<doctest test.test_syntax[32]>", line 1
+SyntaxError: illegal expression for augmented assignment (<doctest test.test_syntax[32]>, line 1)
 >>> f() += 1
 Traceback (most recent call last):
 SyntaxError: illegal expression for augmented assignment (<doctest test.test_syntax[33]>, line 1)

@@ -54,6 +54,10 @@ PyAPI_FUNC(double) PyComplex_RealAsDouble(PyObject *op);
 PyAPI_FUNC(double) PyComplex_ImagAsDouble(PyObject *op);
 PyAPI_FUNC(Py_complex) PyComplex_AsCComplex(PyObject *op);
 
+/* Defined for compile.c in wordcode-based Pythons. */
+
+int _py_complex_strict_equal(PyComplexObject *a, PyComplexObject *b);
+
 #ifdef __cplusplus
 }
 #endif

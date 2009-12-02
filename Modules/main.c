@@ -339,7 +339,7 @@ Py_Main(int argc, char **argv)
 				cf.cf_flags |= CO_FUTURE_DIVISION;
 				/* And this tells the eval loop to treat
 				   BINARY_DIVIDE as BINARY_TRUE_DIVIDE */
-				_Py_QnewFlag = 1;
+				_PyEval_SetQnewFlag(1);
 				break;
 			}
 			fprintf(stderr,
@@ -513,7 +513,7 @@ Py_Main(int argc, char **argv)
 
 	if (Py_VerboseFlag ||
 	    (command == NULL && filename == NULL && module == NULL && stdin_is_interactive)) {
-		fprintf(stderr, "Python %s on %s\n",
+		fprintf(stderr, "WPython \"CISCy\" %s on %s\n",
 			Py_GetVersion(), Py_GetPlatform());
  		if (!Py_NoSiteFlag)
  			fprintf(stderr, "%s\n", COPYRIGHT);

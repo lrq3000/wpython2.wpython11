@@ -2403,6 +2403,57 @@ _PyTrash_destroy_chain(void)
 	}
 }
 
+/* Defined for compile.c in wordcode-based Pythons */
+
+long
+_Py_object_relaxed_hash(PyObject *o)
+{
+    if (PyTuple_CheckExact(o))
+        return _Py_tuple_relaxed_hash((PyTupleObject *) o);
+	else if (PyList_CheckExact(o))
+        return _Py_list_relaxed_hash((PyListObject *) o);
+	else if	(PyDict_CheckExact(o))
+        return _Py_dict_relaxed_hash((PyDictObject *) o);
+    else
+        return PyObject_Hash(o);
+}
+
+/* Checks if v is equal to w.  Return
+   -1 if exception (PyErr_Occurred() true in latter case).
+    0 if v != w.
+    1 if v == w.
+*/
+int
+_Py_object_strict_equal(PyObject *v, PyObject *w)
+{
+	int result;
+
+	if (v == w)
+		return 1;
+	if (v->ob_type != w->ob_type)
+		return 0;
+	if (Py_EnterRecursiveCall(" in equal"))
+		return -1;
+    if (PyCode_Check(v))
+        result = _Py_code_strict_equal((PyCodeObject *) v, (PyCodeObject *) w);
+    else if (PyComplex_CheckExact(v))
+        result = _py_complex_strict_equal((PyComplexObject *) v, (PyComplexObject *) w);
+    else if (PyDict_CheckExact(v))
+        result = _Py_dict_strict_equal((PyDictObject *) v, (PyDictObject *) w);
+    else if (PyFloat_CheckExact(v))
+        result = _Py_float_strict_equal((PyFloatObject *) v, (PyFloatObject *) w);
+    else if (PyList_CheckExact(v))
+        result = _Py_list_strict_equal((PyListObject *) v, (PyListObject *) w);
+    else if (PyTuple_CheckExact(v))
+        result = _Py_tuple_strict_equal((PyTupleObject *) v, (PyTupleObject *) w);
+    else {
+        result = do_cmp(v, w);
+        result = result == -2 ? -1 : result == 0;
+    }
+	Py_LeaveRecursiveCall();
+	return result;
+}
+
 #ifdef __cplusplus
 }
 #endif

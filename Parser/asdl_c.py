@@ -504,8 +504,11 @@ class Obj2ModVisitor(PickleVisitor):
             self.emit("asdl_seq_SET(%s, i, value);" % field.name, depth+2)
             self.emit("}", depth+1)
         else:
-            self.emit("res = obj2ast_%s(tmp, &%s, arena);" %
-                      (field.type, field.name), depth+1)
+            if str(name) == 'Const' and str(field.name) == 'c':
+                self.emit("res = obj2ast_constant(tmp, &c, arena);", depth+1)
+            else:
+                self.emit("res = obj2ast_%s(tmp, &%s, arena);" %
+                          (field.type, field.name), depth+1)
             self.emit("if (res != 0) goto failed;", depth+1)
 
         self.emit("Py_XDECREF(tmp);", depth+1)
@@ -789,6 +792,15 @@ static int obj2ast_object(PyObject* obj, PyObject** out, PyArena* arena)
 
 #define obj2ast_identifier obj2ast_object
 #define obj2ast_string obj2ast_object
+
+static int obj2ast_constant(PyObject* obj, PyObject** out, PyArena* arena)
+{
+    if (obj)
+        PyArena_AddPyObject(arena, obj);
+    Py_XINCREF(obj);
+    *out = obj;
+    return 0;
+}
 
 static int obj2ast_int(PyObject* obj, int* out, PyArena* arena)
 {

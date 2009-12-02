@@ -73,9 +73,11 @@ extern time_t PyOS_GetLastModificationTime(char *, FILE *);
        Python 2.5c2: 62131 (fix wrong code: for x, in ... in listcomp/genexp)
        Python 2.6a0: 62151 (peephole optimizations and STORE_MAP opcode)
        Python 2.6a1: 62161 (WITH_CLEANUP optimization)
+       Python 2.6.1: 62162 (wordcodes)
+       Python 2.6.4: 62163 (wordcodes)
 .
 */
-#define MAGIC (62161 | ((long)'\r'<<16) | ((long)'\n'<<24))
+#define MAGIC (62163 | ((long)'\r'<<16) | ((long)'\n'<<24))
 
 /* Magic word as global; note that _PyImport_Init() can change the
    value of this global to accommodate for alterations of how the
@@ -3200,9 +3202,9 @@ NullImporter_init(NullImporter *self, PyObject *args, PyObject *kwds)
 #ifndef RISCOS
 #ifndef MS_WINDOWS
 		struct stat statbuf;
-		int rv;
+        int rv;
 
-		rv = stat(path, &statbuf);
+        rv = stat(path, &statbuf);
 		if (rv == 0) {
 			/* it exists */
 			if (S_ISDIR(statbuf.st_mode)) {

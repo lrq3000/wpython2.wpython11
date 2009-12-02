@@ -632,18 +632,14 @@ class Transformer:
             # comp_op: '<' | '>' | '=' | '>=' | '<=' | '<>' | '!=' | '=='
             #          | 'in' | 'not' 'in' | 'is' | 'is' 'not'
             n = nl[1]
-            if n[0] == token.NAME:
-                type = n[1]
+            startop = op = n[0]
+            if op == token.NAME:
+                op = n[1]
                 if len(nl) == 3:
-                    if type == 'not':
-                        type = 'not in'
-                    else:
-                        type = 'is not'
-            else:
-                type = _cmp_types[n[0]]
+                    op = 'not in' if op == 'not' else 'is not'
 
             lineno = nl[1][2]
-            results.append((type, self.com_node(nodelist[i])))
+            results.append((_cmp_types[op], self.com_node(nodelist[i])))
 
         # we need a special "compare" node so that we can distinguish
         #   3 < x < 5   from    (3 < x) < 5
@@ -1408,13 +1404,17 @@ _doc_nodes = [
 # comp_op: '<' | '>' | '=' | '>=' | '<=' | '<>' | '!=' | '=='
 #             | 'in' | 'not' 'in' | 'is' | 'is' 'not'
 _cmp_types = {
-    token.LESS : '<',
-    token.GREATER : '>',
-    token.EQEQUAL : '==',
-    token.EQUAL : '==',
-    token.LESSEQUAL : '<=',
-    token.GREATEREQUAL : '>=',
-    token.NOTEQUAL : '!=',
+    token.LESS : 'CMP_LT',
+    token.GREATER : 'CMP_GT',
+    token.EQEQUAL : 'CMP_EQ',
+    token.EQUAL : 'CMP_EQ',
+    token.LESSEQUAL : 'CMP_LE',
+    token.GREATEREQUAL : 'CMP_GE',
+    token.NOTEQUAL : 'CMP_NE',
+    'in' : 'CMP_IN',
+    'not in' : 'CMP_NOT_IN',
+    'is' : 'CMP_IS',
+    'is not' : 'CMP_IS_NOT',
     }
 
 _legal_node_types = [

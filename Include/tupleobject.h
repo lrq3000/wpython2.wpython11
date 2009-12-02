@@ -54,6 +54,12 @@ PyAPI_FUNC(PyObject *) PyTuple_Pack(Py_ssize_t, ...);
 
 PyAPI_FUNC(int) PyTuple_ClearFreeList(void);
 
+/* Defined for compile.c in wordcode-based Pythons. */
+
+long _Py_tuple_relaxed_hash(PyTupleObject *v);
+int _Py_tuple_strict_equal(PyTupleObject *vt, PyTupleObject *wt);
+PyObject *_Py_tuple_deep_copy(PyObject *);
+
 #ifdef __cplusplus
 }
 #endif

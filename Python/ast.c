@@ -12,6 +12,7 @@
 #include "token.h"
 #include "parsetok.h"
 #include "graminit.h"
+#include "wpython.h"
 
 #include <assert.h>
 
@@ -19,11 +20,15 @@
 struct compiling {
     char *c_encoding; /* source encoding */
     int c_future_unicode; /* __future__ unicode literals flag */
+    int c_no_folding; /* no constant folding flag */
+	/* enable strict constant folding (1/0 -> syntax error at compile time) */
+    int c_strict_folding; 
     PyArena *c_arena; /* arena for allocating memeory */
     const char *c_filename; /* filename */
 };
 
-static asdl_seq *seq_for_testlist(struct compiling *, const node *);
+static asdl_seq *seq_for_testlist(struct compiling *, const node *,
+								  expr_const_ty *constant);
 static expr_ty ast_for_expr(struct compiling *, const node *);
 static stmt_ty ast_for_stmt(struct compiling *, const node *);
 static asdl_seq *ast_for_suite(struct compiling *, const node *);
@@ -127,6 +132,14 @@ ast_warn(struct compiling *c, const node *n, char *msg)
     return 1;
 }
 
+static void*
+ast_check_error(const node *n, char *msg)
+{
+	if (PyErr_Occurred())
+		ast_error(n, msg);
+    return NULL;
+}
+
 static int
 forbidden_check(struct compiling *c, const node *n, const char *x)
 {
@@ -225,6 +238,9 @@ PyAST_FromNode(const node *n, PyCompilerFlags *flags, const char *filename,
         c.c_encoding = NULL;
     }
     c.c_future_unicode = flags && flags->cf_flags & CO_FUTURE_UNICODE_LITERALS;
+    /* c.c_no_folding = (flags->cf_flags & PyCF_ONLY_AST) != 0; */
+    c.c_no_folding = 0;
+	c.c_strict_folding = 0;
     c.c_arena = arena;
     c.c_filename = filename;
 
@@ -314,6 +330,23 @@ PyAST_FromNode(const node *n, PyCompilerFlags *flags, const char *filename,
     ast_error_finish(filename);
     return NULL;
 }
+
+/* Return a Python object which is a constant */
+
+/*static expr_ty
+Const(object c, expr_const_ty constant, int lineno, int col_offset, PyArena *arena)
+{
+        expr_ty p;
+        p = (expr_ty)PyArena_Malloc(arena, sizeof(*p));
+        if (!p)
+                return NULL;
+        p->kind = Const_kind;
+        p->v.Const.c = c;
+		p->v.Const.constant = constant;
+        p->lineno = lineno;
+        p->col_offset = col_offset;
+        return p;
+}*/
 
 /* Return the AST repr. of the operator represented as syntax (|, ^, etc.)
 */
@@ -423,6 +456,7 @@ set_context(struct compiling *c, expr_ty e, expr_context_ty ctx, const node *n)
         case Dict_kind:
         case Num_kind:
         case Str_kind:
+        case Const_kind:
             expr_name = "literal";
             break;
         case Compare_kind:
@@ -555,7 +589,8 @@ ast_for_comp_op(struct compiling *c, const node *n)
 }
 
 static asdl_seq *
-seq_for_testlist(struct compiling *c, const node *n)
+seq_for_testlist(struct compiling *c, const node *n,
+				 expr_const_ty *constant)
 {
     /* testlist: test (',' test)* [','] */
     asdl_seq *seq;
@@ -571,12 +606,18 @@ seq_for_testlist(struct compiling *c, const node *n)
     if (!seq)
         return NULL;
 
+	/* Defaults to constant value, but if at least one expression wasn't
+	   a constant, reverts to no_const. */
+	*constant = pure_const;
     for (i = 0; i < NCH(n); i += 2) {
         assert(TYPE(CHILD(n, i)) == test || TYPE(CHILD(n, i)) == old_test);
 
         expression = ast_for_expr(c, CHILD(n, i));
         if (!expression)
             return NULL;
+		/* Updates the constant flag. */
+		*constant &= expression->kind == Const_kind ?
+			expression->v.Const.constant : no_const;
 
         assert(i / 2 < seq->size);
         asdl_seq_SET(seq, i / 2, expression);
@@ -960,7 +1001,7 @@ ast_for_ifexpr(struct compiling *c, const node *n)
     if (!orelse)
         return NULL;
     return IfExp(expression, body, orelse, LINENO(n), n->n_col_offset,
-                 c->c_arena);
+			  c->c_arena);
 }
 
 /* XXX(nnorwitz): the listcomp and genexpr code should be refactored
@@ -1279,22 +1320,113 @@ ast_for_genexp(struct compiling *c, const node *n)
 }
 
 static expr_ty
+pyobj_to_expr(PyObject* o, expr_const_ty constant, const node *n, PyArena *arena)
+{
+	if (constant == no_const)
+		if (PyString_CheckExact(o) || PyUnicode_CheckExact(o) ||
+			PyBool_Check(o) || PyInt_CheckExact(o) || PyLong_CheckExact(o) ||
+			PyFloat_CheckExact(o) || PyComplex_CheckExact(o))
+			constant = pure_const;
+		else if (PyList_CheckExact(o) || PyDict_CheckExact(o))
+			constant = mutable_const;
+		else if (PyTuple_CheckExact(o))
+			constant = Py_SIZE(o) ? mutable_const : pure_const;
+	assert(constant != no_const);
+	PyArena_AddPyObject(arena, o);
+	return Const(o, constant, LINENO(n), n->n_col_offset, arena);
+}
+
+static PyObject *
+constant_seq_to_pytuple(asdl_seq *elts)
+{
+	int i;
+	PyObject *t, *o, **dest;
+	t = PyTuple_New(elts->size);
+	if (!t)
+		return NULL;
+	dest = ((PyTupleObject *) t)->ob_item;
+	for(i = 0; i < elts->size; i++) {
+		o = ((expr_ty) (elts->elements[i]))->v.Const.c;
+		Py_INCREF(o);
+		dest[i] = o;
+	}
+	return t;
+}
+
+static PyObject *
+constant_seq_to_pylist(asdl_seq *elts)
+{
+	int i;
+	PyObject *t, *o, **dest;
+	t = PyList_New(elts->size);
+	if (!t)
+		return NULL;
+	dest = ((PyListObject *) t)->ob_item;
+	for(i = 0; i < elts->size; i++) {
+		o = ((expr_ty) (elts->elements[i]))->v.Const.c;
+		Py_INCREF(o);
+		dest[i] = o;
+	}
+	return t;
+}
+
+static PyObject *
+constant_seqs_to_pydict(asdl_seq *keys, asdl_seq *values)
+{
+	int i;
+	PyObject *dict = _PyDict_NewPresized(keys->size);
+	if (!dict)
+		return NULL;
+	for(i = 0; i < keys->size; i++) {
+		PyObject *k, *v;
+		k = ((expr_ty) (keys->elements[i]))->v.Const.c;
+		v = ((expr_ty) (values->elements[i]))->v.Const.c;
+		if (PyDict_SetItem(dict, k, v) < 0) {
+			Py_DECREF(k);
+			Py_DECREF(v);
+			Py_DECREF(dict);
+			return NULL;
+		}
+	}
+	return dict;
+}
+
+static expr_ty
 ast_for_atom(struct compiling *c, const node *n)
 {
     /* atom: '(' [yield_expr|testlist_gexp] ')' | '[' [listmaker] ']'
        | '{' [dictmaker] '}' | '`' testlist '`' | NAME | NUMBER | STRING+
     */
     node *ch = CHILD(n, 0);
-    
+
     switch (TYPE(ch)) {
     case NAME: {
+		PyObject *name;
+
+#ifdef WPY_NONE_NAME_TO_CONST
+        /* "None" identifier will be converted to the None constant */
+		if (!c->c_no_folding)
+			if (!strcmp(STR(ch), "None")) {
+				Py_INCREF(Py_None);
+				return pyobj_to_expr(Py_None, pure_const, n, c->c_arena);
+			}
+			/*else if (!strcmp(STR(ch), "False")) {
+				Py_INCREF(Py_False);
+				return pyobj_to_expr(Py_False, pure_const, n, c->c_arena);
+			}
+			else if (!strcmp(STR(ch), "True")) {
+				Py_INCREF(Py_True);
+				return pyobj_to_expr(Py_True, pure_const, n, c->c_arena);
+			}*/
+#endif
+
         /* All names start in Load context, but may later be
            changed. */
-        PyObject *name = NEW_IDENTIFIER(ch);
-        if (!name)
-            return NULL;
-        return Name(name, Load, LINENO(n), n->n_col_offset, c->c_arena);
-    }
+		name = NEW_IDENTIFIER(ch);
+		if (!name)
+			return NULL;
+		return Name(name, Load, LINENO(n), n->n_col_offset, c->c_arena);
+	}
     case STRING: {
         PyObject *str = parsestrplus(c, n);
         if (!str) {
@@ -1320,88 +1452,173 @@ ast_for_atom(struct compiling *c, const node *n)
 #endif
             return NULL;
         }
-        PyArena_AddPyObject(c->c_arena, str);
-        return Str(str, LINENO(n), n->n_col_offset, c->c_arena);
+#ifdef WPY_STRING_TO_CONST
+        if (c->c_no_folding) {
+#endif
+			PyArena_AddPyObject(c->c_arena, str);
+			return Str(str, LINENO(n), n->n_col_offset, c->c_arena);
+#ifdef WPY_STRING_TO_CONST
+        }
+        else
+#endif
+			return pyobj_to_expr(str, pure_const, n, c->c_arena);
     }
     case NUMBER: {
         PyObject *pynum = parsenumber(c, STR(ch));
-        if (!pynum)
-            return NULL;
-
-        PyArena_AddPyObject(c->c_arena, pynum);
-        return Num(pynum, LINENO(n), n->n_col_offset, c->c_arena);
+		if (!pynum)
+			return NULL;
+#ifdef WPY_NUMBER_TO_CONST
+        if (c->c_no_folding) {
+#endif
+			PyArena_AddPyObject(c->c_arena, pynum);
+			return Num(pynum, LINENO(n), n->n_col_offset, c->c_arena);
+#ifdef WPY_NUMBER_TO_CONST
+        }
+        else
+#endif
+			return pyobj_to_expr(pynum, pure_const, n, c->c_arena);
     }
     case LPAR: /* some parenthesized expressions */
         ch = CHILD(n, 1);
         
         if (TYPE(ch) == RPAR)
-            return Tuple(NULL, Load, LINENO(n), n->n_col_offset, c->c_arena);
-        
-        if (TYPE(ch) == yield_expr)
-            return ast_for_expr(c, ch);
-        
-        if ((NCH(ch) > 1) && (TYPE(CHILD(ch, 1)) == gen_for))
-            return ast_for_genexp(c, ch);
-        
-        return ast_for_testlist_gexp(c, ch);
+#ifdef WPY_EMPTY_TUPLE_TO_CONST
+	        if (c->c_no_folding)
+#endif
+	            return Tuple(NULL, Load, LINENO(n), n->n_col_offset, c->c_arena);
+#ifdef WPY_EMPTY_TUPLE_TO_CONST
+            else {
+				PyObject *pyemptytuple = PyTuple_New(0);
+				if (!pyemptytuple)
+					return NULL;
+				return pyobj_to_expr(pyemptytuple, pure_const, n, c->c_arena);
+			}
+#endif
+		if (TYPE(ch) == yield_expr)
+			return ast_for_expr(c, ch);
+		if ((NCH(ch) > 1) && (TYPE(CHILD(ch, 1)) == gen_for))
+			return ast_for_genexp(c, ch);
+		return ast_for_testlist_gexp(c, ch);
     case LSQB: /* list (or list comprehension) */
         ch = CHILD(n, 1);
         
-        if (TYPE(ch) == RSQB)
-            return List(NULL, Load, LINENO(n), n->n_col_offset, c->c_arena);
-        
+		if (TYPE(ch) == RSQB)
+#ifdef WPY_EMPTY_LIST_TO_CONST
+            if (c->c_no_folding)
+#endif
+	            return List(NULL, Load, LINENO(n), n->n_col_offset, c->c_arena);
+#ifdef WPY_EMPTY_LIST_TO_CONST
+            else {
+				PyObject *pyemptylist = PyList_New(0);
+				if (!pyemptylist)
+					return NULL;
+				return pyobj_to_expr(pyemptylist, content_const, n, c->c_arena);
+			}
+#endif
+
         REQ(ch, listmaker);
         if (NCH(ch) == 1 || TYPE(CHILD(ch, 1)) == COMMA) {
-            asdl_seq *elts = seq_for_testlist(c, ch);
+			expr_const_ty constant;
+            asdl_seq *elts = seq_for_testlist(c, ch, &constant);
             if (!elts)
                 return NULL;
-
-            return List(elts, Load, LINENO(n), n->n_col_offset, c->c_arena);
+#ifdef WPY_LIST_TO_CONST
+			if (!c->c_no_folding && (constant != no_const)) {
+				PyObject *np = constant_seq_to_pylist(elts);
+				if (np == NULL)
+					return NULL;
+				return pyobj_to_expr(np, constant == pure_const ?
+									 content_const : mutable_const,
+									 n, c->c_arena);
+			}
+			else
+#endif
+				return List(elts, Load, LINENO(n), n->n_col_offset, c->c_arena);
         }
-        else
-            return ast_for_listcomp(c, ch);
+        return ast_for_listcomp(c, ch);
     case LBRACE: {
         /* dictmaker: test ':' test (',' test ':' test)* [','] */
         int i, size;
         asdl_seq *keys, *values;
+		expr_const_ty constant;
         
         ch = CHILD(n, 1);
         size = (NCH(ch) + 1) / 4; /* +1 in case no trailing comma */
         keys = asdl_seq_new(size, c->c_arena);
         if (!keys)
             return NULL;
-        
+
         values = asdl_seq_new(size, c->c_arena);
         if (!values)
             return NULL;
-        
+
+		/* Defaults to constant value, but if at least one expression wasn't
+		   a constant, reverts to no_const. */
+		constant = pure_const;
         for (i = 0; i < NCH(ch); i += 4) {
-            expr_ty expression;
+            expr_ty e;
             
-            expression = ast_for_expr(c, CHILD(ch, i));
-            if (!expression)
+            e = ast_for_expr(c, CHILD(ch, i));
+            if (!e)
                 return NULL;
+			if (e->kind == Const_kind) {
+				if ((e->v.Const.constant == mutable_const ||
+					e->v.Const.constant == content_const) &&
+					c->c_strict_folding) {
+					char buf[128];
+					PyOS_snprintf(buf, sizeof(buf),
+								  "unhashable type %s for dictionary key",
+								  e->v.Const.c->ob_type->tp_name);
+					ast_error(CHILD(ch, i), buf);
+					return NULL;
+				}
+			}
+			else
+				constant = no_const;
 
-            asdl_seq_SET(keys, i / 4, expression);
+            asdl_seq_SET(keys, i / 4, e);
 
-            expression = ast_for_expr(c, CHILD(ch, i + 2));
-            if (!expression)
+            e = ast_for_expr(c, CHILD(ch, i + 2));
+            if (!e)
                 return NULL;
+			/* Updates the constant flag. */
+			constant &= e->kind == Const_kind ? e->v.Const.constant : no_const;
 
-            asdl_seq_SET(values, i / 4, expression);
+            asdl_seq_SET(values, i / 4, e);
         }
-        return Dict(keys, values, LINENO(n), n->n_col_offset, c->c_arena);
+#ifdef WPY_DICT_TO_CONST
+		if (!c->c_no_folding && (constant != no_const)) {
+			PyObject *np = constant_seqs_to_pydict(keys, values);
+			if (np == NULL)
+				return NULL;
+			return pyobj_to_expr(np, constant == pure_const ?
+								 content_const : mutable_const, n, c->c_arena);
+		}
+#endif
+		return Dict(keys, values, LINENO(n), n->n_col_offset, c->c_arena);
     }
     case BACKQUOTE: { /* repr */
-        expr_ty expression;
+        expr_ty e;
         if (Py_Py3kWarningFlag &&
             !ast_warn(c, n, "backquote not supported in 3.x; use repr()"))
             return NULL;
-        expression = ast_for_testlist(c, CHILD(n, 1));
-        if (!expression)
+        e = ast_for_testlist(c, CHILD(n, 1));
+        if (!e)
             return NULL;
-
-        return Repr(expression, LINENO(n), n->n_col_offset, c->c_arena);
+#ifdef WPY_BACKQUOTE_TO_CONST
+		if (!c->c_no_folding && e->kind == Const_kind) {
+			PyObject *result = PyObject_Repr(e->v.Const.c);
+			if (!result)
+				if (c->c_strict_folding)
+					return ast_check_error(n, "invalid backquote operation");
+				else {
+					PyErr_Clear();
+					return Repr(e, LINENO(n), n->n_col_offset, c->c_arena);
+				}
+			return pyobj_to_expr(result, pure_const, n, c->c_arena);
+		}
+#endif
+		return Repr(e, LINENO(n), n->n_col_offset, c->c_arena);
     }
     default:
         PyErr_Format(PyExc_SystemError, "unhandled atom %d", TYPE(ch));
@@ -1467,8 +1684,18 @@ ast_for_slice(struct compiling *c, const node *n)
         if (NCH(ch) == 1) {
             /* No expression, so step is None */
             ch = CHILD(ch, 0);
-            step = Name(new_identifier("None", c->c_arena), Load,
-                        LINENO(ch), ch->n_col_offset, c->c_arena);
+#ifdef WPY_NONE_NAME_TO_CONST
+			if (c->c_no_folding)
+#endif
+				step = Name(new_identifier("None", c->c_arena), Load,
+							LINENO(ch), ch->n_col_offset, c->c_arena);
+#ifdef WPY_NONE_NAME_TO_CONST
+			else {
+	            /* None is a constant */
+				Py_INCREF(Py_None);
+				step = pyobj_to_expr(Py_None, pure_const, ch, c->c_arena);
+			}
+#endif
             if (!step)
                 return NULL;
         } else {
@@ -1485,6 +1712,97 @@ ast_for_slice(struct compiling *c, const node *n)
 }
 
 static expr_ty
+unfolded_binop(expr_ty expr1, operator_ty newoperator, expr_ty expr2,
+		   const node *n, struct compiling *c)
+{
+	return BinOp(expr1, newoperator, expr2, LINENO(n), n->n_col_offset,
+				 c->c_arena);
+}
+
+/* Fold binary ops on constants: BINARY_OP(CONST1, CONST2) */
+static expr_ty
+fold_binop(expr_ty expr1, operator_ty newoperator, expr_ty expr2,
+		   const node *n, struct compiling *c)
+{
+#ifdef WPY_BINARY_CONSTANT_FOLDING
+	Py_ssize_t size;
+	if (!c->c_no_folding && expr1->kind == Const_kind &&
+		expr2->kind == Const_kind) {
+		PyObject *obj1, *obj2, *result;
+		expr_const_ty constant;
+		obj1 = expr1->v.Const.c;
+		obj2 = expr2->v.Const.c;
+		switch (newoperator) {
+			case Add:
+				result = PyNumber_Add(obj1, obj2);
+				break;
+			case Sub:
+				result = PyNumber_Subtract(obj1, obj2);
+				break;
+			case Mult:
+				result = PyNumber_Multiply(obj1, obj2);
+				break;
+			case Div:
+				/* Cannot fold this operation statically since
+							   the result can depend on the run-time presence
+							   of the -Qnew flag */
+				return unfolded_binop(expr1, newoperator, expr2, n, c);
+			case Mod:
+				result = PyNumber_Remainder(obj1, obj2);
+				break;
+			case Pow:
+				result = PyNumber_Power(obj1, obj2, Py_None);
+				break;
+			case LShift:
+				result = PyNumber_Lshift(obj1, obj2);
+				break;
+			case RShift:
+				result = PyNumber_Rshift(obj1, obj2);
+				break;
+			case BitOr:
+				result = PyNumber_Or(obj1, obj2);
+				break;
+			case BitXor:
+				result = PyNumber_Xor(obj1, obj2);
+				break;
+			case BitAnd:
+				result = PyNumber_And(obj1, obj2);
+				break;
+			case FloorDiv:
+				result = PyNumber_FloorDivide(obj1, obj2);
+				break;
+			default:
+                PyErr_Format(PyExc_SystemError, "invalid operator: %d",
+                             newoperator);
+                return NULL;
+		}
+		if (!result)
+			if (c->c_strict_folding)
+				return ast_check_error(n, "invalid binary operation");
+			else {
+				PyErr_Clear();
+				return unfolded_binop(expr1, newoperator, expr2, n, c);
+			}
+		size = PyObject_Size(result);
+		if (size == -1)
+			PyErr_Clear();
+		else if (size > 32) {
+			Py_DECREF(result);
+			return unfolded_binop(expr1, newoperator, expr2, n, c);
+		}
+		if (newoperator == Mod && (PyString_CheckExact(obj1) ||
+			PyUnicode_CheckExact(obj1)))
+			constant = pure_const;
+		else
+			constant = expr1->v.Const.constant & expr2->v.Const.constant;
+		return pyobj_to_expr(result, constant, n, c->c_arena);
+	}
+	else
+#endif
+		return unfolded_binop(expr1, newoperator, expr2, n, c);
+}
+
+static expr_ty
 ast_for_binop(struct compiling *c, const node *n)
 {
         /* Must account for a sequence of expressions.
@@ -1493,7 +1811,7 @@ ast_for_binop(struct compiling *c, const node *n)
         */
 
         int i, nops;
-        expr_ty expr1, expr2, result;
+        expr_ty expr1, expr2;
         operator_ty newoperator;
 
         expr1 = ast_for_expr(c, CHILD(n, 0));
@@ -1508,32 +1826,38 @@ ast_for_binop(struct compiling *c, const node *n)
         if (!newoperator)
             return NULL;
 
-        result = BinOp(expr1, newoperator, expr2, LINENO(n), n->n_col_offset,
-                       c->c_arena);
-        if (!result)
+        expr1 = fold_binop(expr1, newoperator, expr2, n, c);
+        if (!expr1)
             return NULL;
 
         nops = (NCH(n) - 1) / 2;
         for (i = 1; i < nops; i++) {
-                expr_ty tmp_result, tmp;
-                const node* next_oper = CHILD(n, i * 2 + 1);
+            const node* next_oper = CHILD(n, i * 2 + 1);
 
-                newoperator = get_operator(next_oper);
-                if (!newoperator)
-                    return NULL;
+            newoperator = get_operator(next_oper);
+            if (!newoperator)
+                return NULL;
 
-                tmp = ast_for_expr(c, CHILD(n, i * 2 + 2));
-                if (!tmp)
-                    return NULL;
+            expr2 = ast_for_expr(c, CHILD(n, i * 2 + 2));
+            if (!expr2)
+                return NULL;
 
-                tmp_result = BinOp(result, newoperator, tmp, 
-                                   LINENO(next_oper), next_oper->n_col_offset,
-                                   c->c_arena);
-                if (!tmp_result) 
-                        return NULL;
-                result = tmp_result;
+			expr1 = fold_binop(expr1, newoperator, expr2, next_oper, c);
+			if (!expr1)
+				return NULL;
         }
-        return result;
+        return expr1;
+}
+
+static expr_ty
+ast_subscript_folding(struct compiling *c, const node *n, expr_ty left_expr,
+					  PyObject *right_obj)
+{
+	PyObject *e;
+	e = PyObject_GetItem(left_expr->v.Const.c, right_obj);
+	if (!e)
+		return ast_check_error(n, "invalid subscription operation");
+	return pyobj_to_expr(e, no_const, n, c->c_arena);
 }
 
 static expr_ty
@@ -1543,20 +1867,20 @@ ast_for_trailer(struct compiling *c, const node *n, expr_ty left_expr)
        subscriptlist: subscript (',' subscript)* [',']
        subscript: '.' '.' '.' | test | [test] ':' [test] [sliceop]
      */
+    expr_ty e;
     REQ(n, trailer);
-    if (TYPE(CHILD(n, 0)) == LPAR) {
+    if (TYPE(CHILD(n, 0)) == LPAR)
         if (NCH(n) == 2)
             return Call(left_expr, NULL, NULL, NULL, NULL, LINENO(n),
-                        n->n_col_offset, c->c_arena);
+						n->n_col_offset, c->c_arena);
         else
             return ast_for_call(c, CHILD(n, 1), left_expr);
-    }
     else if (TYPE(CHILD(n, 0)) == DOT ) {
         PyObject *attr_id = NEW_IDENTIFIER(CHILD(n, 1));
         if (!attr_id)
             return NULL;
         return Attribute(left_expr, attr_id, Load,
-                         LINENO(n), n->n_col_offset, c->c_arena);
+						 LINENO(n), n->n_col_offset, c->c_arena);
     }
     else {
         REQ(CHILD(n, 0), LSQB);
@@ -1566,8 +1890,19 @@ ast_for_trailer(struct compiling *c, const node *n, expr_ty left_expr)
             slice_ty slc = ast_for_slice(c, CHILD(n, 0));
             if (!slc)
                 return NULL;
+#ifdef WPY_CONSTANT_SUBSCRIPTION_FOLDING
+			if (!c->c_no_folding && slc->kind == Index_kind &&
+				slc->v.Index.value->kind == Const_kind &&
+				left_expr->kind == Const_kind) {
+				e = ast_subscript_folding(c, n, left_expr,
+												slc->v.Index.value->v.Const.c);
+				if (e || c->c_strict_folding)
+					return e;
+				PyErr_Clear();
+			}
+#endif
             return Subscript(left_expr, slc, Load, LINENO(n), n->n_col_offset,
-                             c->c_arena);
+							 c->c_arena);
         }
         else {
             /* The grammar is ambiguous here. The ambiguity is resolved 
@@ -1576,40 +1911,131 @@ ast_for_trailer(struct compiling *c, const node *n, expr_ty left_expr)
             */
             int j;
             slice_ty slc;
-            expr_ty e;
             bool simple = true;
+			expr_const_ty constant;
             asdl_seq *slices, *elts;
             slices = asdl_seq_new((NCH(n) + 1) / 2, c->c_arena);
             if (!slices)
                 return NULL;
+			/* Defaults to constant value, but if at least one expression
+			   wasn't a constant, reverts to no_const. */
+			constant = pure_const;
             for (j = 0; j < NCH(n); j += 2) {
                 slc = ast_for_slice(c, CHILD(n, j));
                 if (!slc)
                     return NULL;
-                if (slc->kind != Index_kind)
+                if (slc->kind == Index_kind)
+					/* Updates the constant flag. */
+					constant &= slc->v.Index.value->kind == Const_kind ?
+						slc->v.Index.value->v.Const.constant : no_const;
+				else
                     simple = false;
                 asdl_seq_SET(slices, j / 2, slc);
             }
-            if (!simple) {
+            if (!simple)
                 return Subscript(left_expr, ExtSlice(slices, c->c_arena),
-                                 Load, LINENO(n), n->n_col_offset, c->c_arena);
-            }
-            /* extract Index values and put them in a Tuple */
-            elts = asdl_seq_new(asdl_seq_LEN(slices), c->c_arena);
-            if (!elts)
-                return NULL;
-            for (j = 0; j < asdl_seq_LEN(slices); ++j) {
-                slc = (slice_ty)asdl_seq_GET(slices, j);
-                assert(slc->kind == Index_kind  && slc->v.Index.value);
-                asdl_seq_SET(elts, j, slc->v.Index.value);
-            }
-            e = Tuple(elts, Load, LINENO(n), n->n_col_offset, c->c_arena);
-            if (!e)
-                return NULL;
-            return Subscript(left_expr, Index(e, c->c_arena),
-                             Load, LINENO(n), n->n_col_offset, c->c_arena);
+							  Load, LINENO(n), n->n_col_offset, c->c_arena);
+			/* extract Index values and put them in a Tuple */
+			elts = asdl_seq_new(asdl_seq_LEN(slices), c->c_arena);
+			if (!elts)
+				return NULL;
+			for (j = 0; j < asdl_seq_LEN(slices); ++j) {
+				slc = (slice_ty)asdl_seq_GET(slices, j);
+				assert(slc->kind == Index_kind  && slc->v.Index.value);
+				asdl_seq_SET(elts, j, slc->v.Index.value);
+			}
+			if (!c->c_no_folding && (constant != no_const)) {
+				PyObject *np = constant_seq_to_pytuple(elts);
+				if (np == NULL)
+					return NULL;
+#ifdef WPY_CONSTANT_SUBSCRIPTION_FOLDING
+				if (left_expr->kind == Const_kind) {
+					e = ast_subscript_folding(c, n, left_expr, np);
+                    Py_DECREF(np);
+					if (e || c->c_strict_folding)
+						return e;
+					PyErr_Clear();
+					e = Tuple(elts, Load, LINENO(n), n->n_col_offset,
+							  c->c_arena);
+				}
+                else {
+#endif
+#ifdef WPY_TUPLE_TO_CONST
+                    e = pyobj_to_expr(np, constant == content_const ?
+									  mutable_const : constant, n, c->c_arena);
+#else
+                    Py_DECREF(np);
+				    e = Tuple(elts, Load, LINENO(n), n->n_col_offset, c->c_arena);
+#endif
+                }
+			}
+			else
+				e = Tuple(elts, Load, LINENO(n), n->n_col_offset, c->c_arena);
+			if (!e)
+				return NULL;
+			return Subscript(left_expr, Index(e, c->c_arena),
+						  Load, LINENO(n), n->n_col_offset, c->c_arena);
         }
     }
+}
+
+static expr_ty
+unfolded_unop(unaryop_ty newoperator, expr_ty expression,
+			  const node *n, struct compiling *c)
+{
+	return UnaryOp(newoperator, expression, LINENO(n), n->n_col_offset,
+				   c->c_arena);
+}
+
+/* Fold unary ops on constants: UNARY_OP(CONST) */
+static expr_ty
+fold_unop(unaryop_ty newoperator, expr_ty expression,
+		   const node *n, struct compiling *c)
+{
+#ifdef WPY_UNARY_CONSTANT_FOLDING
+	if (!c->c_no_folding && expression->kind == Const_kind) {
+		PyObject *obj, *result = NULL;
+		obj = expression->v.Const.c;
+		switch (newoperator) {
+			case Invert:
+				result = PyNumber_Invert(obj);
+				break;
+			case Not: {
+				int value = PyObject_Not(obj);
+				if (value < 0)
+					return ast_check_error(n, "invalid not operation");
+				result = value ? Py_True : Py_False;
+				Py_INCREF(result);
+				break;
+			}
+			case UAdd:
+				result = PyNumber_Positive(obj);
+				break;
+			case USub: {
+				int nonzero = PyObject_IsTrue(obj);
+				if (nonzero < 0)
+					return NULL;
+				if (nonzero == 1) {
+					result = PyNumber_Negative(obj);
+					break;
+				}
+				else
+					/* Preserve the sign of -0.0 */
+					return unfolded_unop(USub, expression, n, c);
+			}
+		}
+		if (!result)
+			if (c->c_strict_folding)
+				return ast_check_error(n, "invalid unary operation");
+			else {
+				PyErr_Clear();
+				return unfolded_unop(newoperator, expression, n, c);
+			}
+		return pyobj_to_expr(result, no_const, n, c->c_arena);
+	}
+	else
+#endif
+		return unfolded_unop(newoperator, expression, n, c);
 }
 
 static expr_ty
@@ -1617,6 +2043,7 @@ ast_for_factor(struct compiling *c, const node *n)
 {
     node *pfactor, *ppower, *patom, *pnum;
     expr_ty expression;
+	unaryop_ty newoperator;
 
     /* If the unary - operator is applied to a constant, don't generate
        a UNARY_NEGATIVE opcode.  Just store the approriate value as a
@@ -1649,18 +2076,20 @@ ast_for_factor(struct compiling *c, const node *n)
 
     switch (TYPE(CHILD(n, 0))) {
         case PLUS:
-            return UnaryOp(UAdd, expression, LINENO(n), n->n_col_offset,
-                           c->c_arena);
+			newoperator = UAdd;
+			break;
         case MINUS:
-            return UnaryOp(USub, expression, LINENO(n), n->n_col_offset,
-                           c->c_arena);
+			newoperator = USub;
+			break;
         case TILDE:
-            return UnaryOp(Invert, expression, LINENO(n),
-                           n->n_col_offset, c->c_arena);
+			newoperator = Invert;
+			break;
+		default:
+			PyErr_Format(PyExc_SystemError, "unhandled factor: %d",
+						 TYPE(CHILD(n, 0)));
+			return NULL;
     }
-    PyErr_Format(PyExc_SystemError, "unhandled factor: %d",
-                 TYPE(CHILD(n, 0)));
-    return NULL;
+	return fold_unop(newoperator, expression, n, c);
 }
 
 static expr_ty
@@ -1691,7 +2120,7 @@ ast_for_power(struct compiling *c, const node *n)
         expr_ty f = ast_for_expr(c, CHILD(n, NCH(n) - 1));
         if (!f)
             return NULL;
-        tmp = BinOp(e, Pow, f, LINENO(n), n->n_col_offset, c->c_arena);
+		tmp = fold_binop(e, Pow, f, n, c);
         if (!tmp)
             return NULL;
         e = tmp;
@@ -1760,9 +2189,9 @@ ast_for_expr(struct compiling *c, const node *n)
             }
             if (!strcmp(STR(CHILD(n, 1)), "and"))
                 return BoolOp(And, seq, LINENO(n), n->n_col_offset,
-                              c->c_arena);
-            assert(!strcmp(STR(CHILD(n, 1)), "or"));
-            return BoolOp(Or, seq, LINENO(n), n->n_col_offset, c->c_arena);
+							  c->c_arena);
+			assert(!strcmp(STR(CHILD(n, 1)), "or"));
+			return BoolOp(Or, seq, LINENO(n), n->n_col_offset, c->c_arena);
         case not_test:
             if (NCH(n) == 1) {
                 n = CHILD(n, 0);
@@ -1772,9 +2201,23 @@ ast_for_expr(struct compiling *c, const node *n)
                 expr_ty expression = ast_for_expr(c, CHILD(n, 1));
                 if (!expression)
                     return NULL;
-
-                return UnaryOp(Not, expression, LINENO(n), n->n_col_offset,
-                               c->c_arena);
+				/* not (a is b) -->  a is not b
+				   not (a in b) -->  a not in b
+				   not (a is not b) -->  a is b
+				   not (a not in b) -->  a in b
+				*/
+#ifdef WPY_NOT_WITH_IN_OR_IS
+				if (expression->kind == Compare_kind &&
+					expression->v.Compare.ops->size == 1 &&
+					expression->v.Compare.ops->elements[0] >= Is &&
+					expression->v.Compare.ops->elements[0] <= NotIn) {
+					expression->v.Compare.ops->elements[0] =
+						(expression->v.Compare.ops->elements[0] - 1 ^ 1) + 1;
+					return expression;
+				}
+				else
+#endif
+					return fold_unop(Not, expression, n, c);
             }
         case comparison:
             if (NCH(n) == 1) {
@@ -1796,25 +2239,42 @@ ast_for_expr(struct compiling *c, const node *n)
                     cmpop_ty newoperator;
 
                     newoperator = ast_for_comp_op(c, CHILD(n, i));
-                    if (!newoperator) {
+                    if (!newoperator)
                         return NULL;
-                    }
 
                     expression = ast_for_expr(c, CHILD(n, i + 1));
-                    if (!expression) {
+                    if (!expression)
                         return NULL;
-                    }
+
+#ifdef WPY_IN_CONST_TO_PURE_CONST
+					if ((expression->kind == Const_kind) &&
+						(newoperator == In || newoperator == NotIn)) {
+						PyObject *v, *w;
+						expression->v.Const.constant = pure_const;
+						v = w = expression->v.Const.c;
+						if (PyList_CheckExact(v))
+							w = PyList_AsTuple(v);
+						else if (PyDict_CheckExact(v))
+							;
+							//w = PyFrozenSet_New(v);
+						if (!w)
+							return NULL;
+						if (v != w) {
+							v = w;
+							PyArena_AddPyObject(c->c_arena, v);
+						}
+						expression->v.Const.c = v;
+					}
+#endif
                         
                     asdl_seq_SET(ops, i / 2, newoperator);
                     asdl_seq_SET(cmps, i / 2, expression);
                 }
                 expression = ast_for_expr(c, CHILD(n, 0));
-                if (!expression) {
+                if (!expression)
                     return NULL;
-                }
-                    
                 return Compare(expression, ops, cmps, LINENO(n),
-                               n->n_col_offset, c->c_arena);
+							   n->n_col_offset, c->c_arena);
             }
             break;
 
@@ -1991,7 +2451,7 @@ ast_for_call(struct compiling *c, const node *n, expr_ty func)
     }
 
     return Call(func, args, keywords, vararg, kwarg, func->lineno,
-                func->col_offset, c->c_arena);
+				func->col_offset, c->c_arena);
 }
 
 static expr_ty
@@ -2014,10 +2474,22 @@ ast_for_testlist(struct compiling *c, const node* n)
     if (NCH(n) == 1)
         return ast_for_expr(c, CHILD(n, 0));
     else {
-        asdl_seq *tmp = seq_for_testlist(c, n);
+		expr_const_ty constant;
+        asdl_seq *tmp = seq_for_testlist(c, n, &constant);
         if (!tmp)
             return NULL;
-        return Tuple(tmp, Load, LINENO(n), n->n_col_offset, c->c_arena);
+#ifdef WPY_TUPLE_TO_CONST
+		if (!c->c_no_folding && (constant != no_const)) {
+			PyObject *np = constant_seq_to_pytuple(tmp);
+			if (np == NULL)
+				return NULL;
+			return pyobj_to_expr(np, constant == content_const ?
+								 constant = mutable_const : constant,
+								 n, c->c_arena);
+		}
+        else
+#endif
+			return Tuple(tmp, Load, LINENO(n), n->n_col_offset, c->c_arena);
     }
 }
 
@@ -2037,6 +2509,7 @@ static asdl_seq*
 ast_for_class_bases(struct compiling *c, const node* n)
 {
     /* testlist: test (',' test)* [','] */
+	expr_const_ty constant;
     assert(NCH(n) > 0);
     REQ(n, testlist);
     if (NCH(n) == 1) {
@@ -2051,7 +2524,7 @@ ast_for_class_bases(struct compiling *c, const node* n)
         return bases;
     }
 
-    return seq_for_testlist(c, n);
+    return seq_for_testlist(c, n, &constant);
 }
 
 static stmt_ty

@@ -121,6 +121,10 @@ PyAPI_FUNC(PyObject *) _PyFloat_FormatAdvanced(PyObject *obj,
 					       char *format_spec,
 					       Py_ssize_t format_spec_len);
 
+/* Defined for compile.c in wordcode-based Pythons. */
+
+int _Py_float_strict_equal(PyFloatObject *a, PyFloatObject *b);
+
 #ifdef __cplusplus
 }
 #endif

@@ -1989,6 +1989,32 @@ PyTypeObject PyFloat_Type = {
 	float_new,				/* tp_new */
 };
 
+/* Defined for compile.c in wordcode-based Pythons. */
+
+int
+_Py_float_strict_equal(PyFloatObject *a, PyFloatObject *b)
+{
+	register PyObject *z = float_richcompare((PyObject *) a, (PyObject *) b, Py_EQ);
+	register int result;
+	if (!z)
+		return -1;
+	if (z == Py_NotImplemented) {
+		Py_DECREF(z);
+		return -1;
+	}
+	result = z == Py_True;
+	Py_DECREF(z);
+	/* distinguish 0.0 from -0.0 on IEEE platforms */
+	if (result && (a->ob_fval == 0.0) && (b->ob_fval == 0.0)) {
+		register unsigned char *p, *q;
+		p = (unsigned char *) &a->ob_fval;
+		q = (unsigned char *) &b->ob_fval;
+		result &= (*p == *q) &
+			   (p[sizeof(double) - 1] == q[sizeof(double) - 1]);
+	}
+	return result;
+}
+
 void
 _PyFloat_Init(void)
 {

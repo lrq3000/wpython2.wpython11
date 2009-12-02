@@ -8,6 +8,9 @@ from compiler import misc
 from compiler.consts \
      import CO_OPTIMIZED, CO_NEWLOCALS, CO_VARARGS, CO_VARKEYWORDS
 
+def inst_len(inst):
+    return 1 if len(inst) == 1 or inst[0].startswith('S_') else 2
+
 class FlowGraph:
     def __init__(self):
         self.current = self.entry = Block()
@@ -258,8 +261,10 @@ class Block:
         self.next.append(block)
         assert len(self.next) == 1, map(str, self.next)
 
-    _uncond_transfer = ('RETURN_VALUE', 'RAISE_VARARGS', 'YIELD_VALUE',
-                        'JUMP_ABSOLUTE', 'JUMP_FORWARD', 'CONTINUE_LOOP')
+    _uncond_transfer = frozenset(('RETURN_VALUE', 'YIELD_VALUE',
+                        'RAISE_0', 'RAISE_1', 'RAISE_2', 'RAISE_3',
+                        'JUMP_ABSOLUTE', 'JUMP_FORWARD', 'CONTINUE_LOOP',
+                        'LIST_APPEND_LOOP'))
 
     def pruneNext(self):
         """Remove bogus edge for unconditional transfers
@@ -384,10 +389,9 @@ class PyFlowGraph(FlowGraph):
                 print
             if len(t) == 1:
                 print "\t", "%3d" % pc, opname
-                pc = pc + 1
             else:
                 print "\t", "%3d" % pc, opname, t[1]
-                pc = pc + 3
+            pc += inst_len(t)
         if io:
             sys.stdout = save
 
@@ -432,19 +436,14 @@ class PyFlowGraph(FlowGraph):
             begin[b] = pc
             for inst in b.getInstructions():
                 insts.append(inst)
-                if len(inst) == 1:
-                    pc = pc + 1
-                elif inst[0] != "SET_LINENO":
-                    # arg takes 2 bytes
-                    pc = pc + 3
+                if inst[0] != "SET_LINENO":
+                    pc += inst_len(inst)
             end[b] = pc
         pc = 0
         for i in range(len(insts)):
             inst = insts[i]
-            if len(inst) == 1:
-                pc = pc + 1
-            elif inst[0] != "SET_LINENO":
-                pc = pc + 3
+            if inst[0] != "SET_LINENO":
+                pc += inst_len(inst)
             opname = inst[0]
             if self.hasjrel.has_elt(opname):
                 oparg = inst[1]
@@ -548,10 +547,6 @@ class PyFlowGraph(FlowGraph):
         self._lookupName(arg, self.varnames)
         return self._lookupName(arg, self.closure)
 
-    _cmp = list(dis.cmp_op)
-    def _convert_COMPARE_OP(self, arg):
-        return self._cmp.index(arg)
-
     # similarly for other opcodes...
 
     for name, obj in locals().items():
@@ -567,6 +562,9 @@ class PyFlowGraph(FlowGraph):
             opname = t[0]
             if len(t) == 1:
                 lnotab.addCode(self.opnum[opname])
+            elif opname.startswith('S_'):
+                # Special case for S_CALL: opcode is in high 8 bits
+                lnotab.addCode(t[1] << 8 | self.opnum[opname[2 : ]] >> 8)
             else:
                 oparg = t[1]
                 if opname == "SET_LINENO":
@@ -582,9 +580,13 @@ class PyFlowGraph(FlowGraph):
         self.stage = DONE
 
     opnum = {}
-    for num in range(len(dis.opname)):
-        opnum[dis.opname[num]] = num
-    del num
+    for opname, opcode in dis.opmap.iteritems():
+        if isinstance(opcode, tuple):
+            opcode, oparg = opcode
+            opnum[opname] = oparg << 8 | opcode
+        else:
+            opnum[opname] = opcode << 8 | dis.EXTENDED_ARG16
+    del opname, opcode, oparg
 
     def newCodeObject(self):
         assert self.stage == DONE
@@ -616,8 +618,7 @@ class PyFlowGraph(FlowGraph):
         return tuple(l)
 
 def isJump(opname):
-    if opname[:4] == 'JUMP':
-        return 1
+    return 'JUMP' in opname
 
 class TupleArg:
     """Helper for marking func defs with nested tuples in arglist"""
@@ -666,10 +667,13 @@ class LineAddrTable:
         self.lastoff = 0
         self.lnotab = []
 
-    def addCode(self, *args):
+    def addCode(self, opcode, *args):
+        hi, lo = twobyte(opcode)
+        self.code.append(chr(lo))
+        self.code.append(chr(hi))
         for arg in args:
             self.code.append(chr(arg))
-        self.codeOffset = self.codeOffset + len(args)
+        self.codeOffset += 2 if args else 1
 
     def nextLine(self, lineno):
         if self.firstline == 0:
@@ -742,48 +746,74 @@ class StackDepthTracker:
         return maxDepth
 
     effect = {
+        # UNARY_OPS
+        'SLICE_0': 1,
+
+        # BINARY_OPS
+        'BUILD_SLICE_2': -1,
+
+        # TERNARY_OPS
+        'SLICE_3': -1,
+        'BUILD_SLICE_3': -2,
+        'BUILD_CLASS': -2,
+
+        # STACK_OPS
         'POP_TOP': -1,
+        'POP_TWO': -2,
+        'POP_THREE': -3,
         'DUP_TOP': 1,
-        'LIST_APPEND': -2,
-        'SLICE+1': -1,
-        'SLICE+2': -1,
-        'SLICE+3': -2,
-        'STORE_SLICE+0': -1,
-        'STORE_SLICE+1': -2,
-        'STORE_SLICE+2': -2,
-        'STORE_SLICE+3': -3,
-        'DELETE_SLICE+0': -1,
-        'DELETE_SLICE+1': -2,
-        'DELETE_SLICE+2': -2,
-        'DELETE_SLICE+3': -3,
+        'DUP_TOP_TWO': 2,
+        'DUP_TOP_THREE': 3,
+
+        # STACK_ERR_OPS
+        'STORE_SLICE_0': -2,
+        'STORE_SLICE_1': -3,
+        'STORE_SLICE_2': -3,
+        'STORE_SLICE_3': -4,
+        'DELETE_SLICE_0': -1,
+        'DELETE_SLICE_1': -2,
+        'DELETE_SLICE_2': -2,
+        'DELETE_SLICE_3': -3,
         'STORE_SUBSCR': -3,
         'DELETE_SUBSCR': -2,
-        # PRINT_EXPR?
+        'STORE_MAP': -2,
+        'PRINT_EXPR' : -1,
+        'PRINT_ITEM_TO' : -2,
         'PRINT_ITEM': -1,
-        'RETURN_VALUE': -1,
-        'YIELD_VALUE': -1,
+        'PRINT_NEWLINE_TO': -1,
+  
+        # MISC_OPS
         'EXEC_STMT': -3,
-        'BUILD_CLASS': -2,
-        'STORE_NAME': -1,
+        'IMPORT_STAR': -1,
+        'END_FINALLY': -1,
+        'WITH_CLEANUP': -1,
+        'RAISE_1': -1,
+        'RAISE_2': -2,
+        'RAISE_3': -3,
+        'RETURN_VALUE': -1,
+
+        # NORMAL OPS
+        'STORE_FAST': -1,
+        'LOAD_ATTR': 0, # unlike other loads
         'STORE_ATTR': -2,
         'DELETE_ATTR': -1,
         'STORE_GLOBAL': -1,
+        'STORE_NAME': -1,
+        'JUMP_IF_FALSE': -1,
+        'JUMP_IF_TRUE': -1,
         'BUILD_MAP': 1,
-        'COMPARE_OP': -1,
-        'STORE_FAST': -1,
-        'IMPORT_STAR': -1,
-        'IMPORT_NAME': -1,
         'IMPORT_FROM': 1,
-        'LOAD_ATTR': 0, # unlike other loads
         # close enough...
         'SETUP_EXCEPT': 3,
         'SETUP_FINALLY': 3,
         'FOR_ITER': 1,
-        'WITH_CLEANUP': -1,
+        'LIST_APPEND_LOOP': -2,
+        'STORE_DEREF': -1,
         }
     # use pattern match
     patterns = [
         ('BINARY_', -1),
+        ('INPLACE_', -1),
         ('LOAD_', 1),
         ]
 
@@ -802,17 +832,19 @@ class StackDepthTracker:
         return self.CALL_FUNCTION(argc)-1
     def CALL_FUNCTION_VAR_KW(self, argc):
         return self.CALL_FUNCTION(argc)-2
+    def S_CALL_FUNCTION(self, argc):
+        hi, lo = divmod(argc, 16)
+        return -(lo + hi * 2)
+    def S_CALL_FUNCTION_VAR(self, argc):
+        return self.S_CALL_FUNCTION(argc)-1
+    def S_CALL_FUNCTION_KW(self, argc):
+        return self.S_CALL_FUNCTION(argc)-1
+    def S_CALL_FUNCTION_VAR_KW(self, argc):
+        return self.S_CALL_FUNCTION(argc)-2
     def MAKE_FUNCTION(self, argc):
         return -argc
     def MAKE_CLOSURE(self, argc):
         # XXX need to account for free variables too!
         return -argc
-    def BUILD_SLICE(self, argc):
-        if argc == 2:
-            return -1
-        elif argc == 3:
-            return -2
-    def DUP_TOPX(self, argc):
-        return argc
 
 findDepth = StackDepthTracker().findDepth

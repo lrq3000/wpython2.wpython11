@@ -76,9 +76,13 @@ module Python version "$Revision: 62047 $"
 	     | Name(identifier id, expr_context ctx)
 	     | List(expr* elts, expr_context ctx) 
 	     | Tuple(expr* elts, expr_context ctx)
+	     | Const(object c, expr_const constant) -- a constant as a PyObject.
 
 	      -- col_offset is the byte offset in the utf8 string the parser uses
 	      attributes (int lineno, int col_offset)
+
+	expr_const = no_const | dummy_1 | mutable_const | dummy_2 | dummy_3 | dummy_4 | content_const
+             | dummy_5 | dummy_6 | dummy_7 | dummy_8 | dummy_9 | dummy_10 | dummy_11 | pure_const
 
 	expr_context = Load | Store | Del | AugLoad | AugStore | Param
 

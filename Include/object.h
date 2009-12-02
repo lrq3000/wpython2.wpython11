@@ -967,6 +967,11 @@ PyAPI_DATA(PyObject *) _PyTrash_delete_later;
 	else \
 		_PyTrash_deposit_object((PyObject*)op);
 
+/* Defined for compile.c in wordcode-based Pythons. */
+
+long _Py_object_relaxed_hash(PyObject *o);
+int _Py_object_strict_equal(PyObject *v, PyObject *w);
+
 #ifdef __cplusplus
 }
 #endif

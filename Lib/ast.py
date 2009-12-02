@@ -54,6 +54,8 @@ def literal_eval(node_or_string):
             return node.s
         elif isinstance(node, Num):
             return node.n
+        elif isinstance(node, Const):
+            return node.c
         elif isinstance(node, Tuple):
             return tuple(map(_convert, node.elts))
         elif isinstance(node, List):
@@ -182,12 +184,17 @@ def get_docstring(node, clean=True):
     """
     if not isinstance(node, (FunctionDef, ClassDef, Module)):
         raise TypeError("%r can't have docstrings" % node.__class__.__name__)
-    if node.body and isinstance(node.body[0], Expr) and \
-       isinstance(node.body[0].value, Str):
-        if clean:
-            import inspect
-            return inspect.cleandoc(node.body[0].value.s)
-        return node.body[0].value.s
+    if node.body and isinstance(node.body[0], Expr):
+        if isinstance(node.body[0].value, Str):
+						if clean:
+								import inspect
+								return inspect.cleandoc(node.body[0].value.s)
+						return node.body[0].value.s
+        if isinstance(node.body[0].value, Const):
+						if clean:
+								import inspect
+								return inspect.cleandoc(node.body[0].value.c)
+						return node.body[0].value.c
 
 
 def walk(node):

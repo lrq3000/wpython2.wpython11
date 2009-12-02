@@ -2275,6 +2275,327 @@ PyTypeObject PyDict_Type = {
 	PyObject_GC_Del,        		/* tp_free */
 };
 
+/* Defined for compile.c in wordcode-based Pythons */
+
+long
+_Py_dict_relaxed_hash(PyDictObject *v)
+{
+	PyDictEntry *p = v->ma_table;
+	register Py_ssize_t len = v->ma_mask;
+	register long x, y;
+	long mult = 1000003L;
+	x = 0x345678L;
+	while (len-- >= 0) {
+		register PyDictEntry *entry = p++;
+		register PyObject *o = entry->me_value;
+		if (o != NULL) {
+			y = _Py_object_relaxed_hash(o);
+			if (y == -1)
+				return -1;
+			x = (x ^ y) * mult;
+			mult += (long)(82520L + len + len);
+			y = _Py_object_relaxed_hash(entry->me_key);
+			if (y == -1)
+				return -1;
+			x = (x ^ y) * mult;
+			mult += (long)(82520L + len + len);
+		}
+	}
+	x += 97531L;
+	if (x == -1)
+		x = -2;
+	return x;
+}
+
+int
+_Py_dict_strict_equal(PyDictObject *vd, PyDictObject *wd)
+{
+	PyDictEntry *p;
+	register Py_ssize_t len;
+	if (vd->ma_used != wd->ma_used)
+		return 0;
+	len = vd->ma_mask;
+	p = vd->ma_table;
+	while (--len >= 0) {
+		register PyDictEntry *entry = p++;
+		register PyObject *v1 = entry->me_value;
+		if (v1 != NULL) {
+			PyObject *k, *v2;
+			long hash;
+			k = entry->me_key;
+			hash = _Py_object_relaxed_hash(k);
+			if (hash == -1)
+				return -1;
+			v2 = _Py_dict_get_item_with_hash((PyObject *) wd, k, hash);
+			if (!v2)
+				return 0;
+			if (v1->ob_type != v2->ob_type)
+				return 0;
+			else {
+				register int cmp = _Py_object_strict_equal(v1, v2);
+				if (cmp <= 0)
+					return cmp;
+			}
+		}
+	}
+	return 1;
+}
+
+static PyDictEntry *
+strict_lookdict(PyDictObject *mp, PyObject *key, register long hash)
+{
+	register size_t i;
+	register size_t perturb;
+	register PyDictEntry *freeslot;
+	register size_t mask = (size_t)mp->ma_mask;
+	PyDictEntry *ep0 = mp->ma_table;
+	register PyDictEntry *ep;
+	register int cmp;
+	PyObject *startkey;
+	struct _typeobject *t;
+
+	i = (size_t)hash & mask;
+	ep = &ep0[i];
+	if (ep->me_key == NULL || ep->me_key == key)
+		return ep;
+
+	if (ep->me_key == dummy)
+		freeslot = ep;
+	else {
+		if (ep->me_hash == hash) {
+			startkey = ep->me_key;
+			t = startkey->ob_type;
+			if (t != key->ob_type)
+				cmp = 0;
+			else {
+				Py_INCREF(startkey);
+				cmp = _Py_object_strict_equal(startkey, key);
+				Py_DECREF(startkey);
+				if (cmp < 0)
+					return NULL;
+			}
+			if (ep0 == mp->ma_table && ep->me_key == startkey) {
+				if (cmp > 0)
+					return ep;
+			}
+			else {
+				/* The compare did major nasty stuff to the
+				 * dict:  start over.
+				 * XXX A clever adversary could prevent this
+				 * XXX from terminating.
+ 				 */
+ 				return strict_lookdict(mp, key, hash);
+ 			}
+		}
+		freeslot = NULL;
+	}
+
+	/* In the loop, me_key == dummy is by far (factor of 100s) the
+	   least likely outcome, so test for that last. */
+	for (perturb = hash; ; perturb >>= PERTURB_SHIFT) {
+		i = (i << 2) + i + perturb + 1;
+		ep = &ep0[i & mask];
+		if (ep->me_key == NULL)
+			return freeslot == NULL ? ep : freeslot;
+		if (ep->me_key == key)
+			return ep;
+		if (ep->me_hash == hash && ep->me_key != dummy) {
+			startkey = ep->me_key;
+			t = startkey->ob_type;
+			if (t != key->ob_type)
+				cmp = 0;
+			else {
+				Py_INCREF(startkey);
+				cmp = _Py_object_strict_equal(startkey, key);
+				Py_DECREF(startkey);
+				if (cmp < 0)
+					return NULL;
+			}
+			if (ep0 == mp->ma_table && ep->me_key == startkey) {
+				if (cmp > 0)
+					return ep;
+			}
+			else {
+				/* The compare did major nasty stuff to the
+				 * dict:  start over.
+				 * XXX A clever adversary could prevent this
+				 * XXX from terminating.
+ 				 */
+ 				return strict_lookdict(mp, key, hash);
+ 			}
+		}
+		else if (ep->me_key == dummy && freeslot == NULL)
+			freeslot = ep;
+	}
+	assert(0);	/* NOT REACHED */
+	return 0;
+}
+
+static PyDictEntry *
+strict_lookdict_string(PyDictObject *mp, PyObject *key, register long hash)
+{
+	register size_t i;
+	register size_t perturb;
+	register PyDictEntry *freeslot;
+	register size_t mask = (size_t)mp->ma_mask;
+	PyDictEntry *ep0 = mp->ma_table;
+	register PyDictEntry *ep;
+
+	/* Make sure this function doesn't have to handle non-string keys,
+	   including subclasses of str; e.g., one reason to subclass
+	   strings is to override __eq__, and for speed we don't cater to
+	   that here. */
+	if (!PyString_CheckExact(key)) {
+#ifdef SHOW_CONVERSION_COUNTS
+		++converted;
+#endif
+		mp->ma_lookup = strict_lookdict;
+		return strict_lookdict(mp, key, hash);
+	}
+	i = hash & mask;
+	ep = &ep0[i];
+	if (ep->me_key == NULL || ep->me_key == key)
+		return ep;
+	if (ep->me_key == dummy)
+		freeslot = ep;
+	else {
+		if (ep->me_hash == hash && _PyString_Eq(ep->me_key, key))
+			return ep;
+		freeslot = NULL;
+	}
+
+	/* In the loop, me_key == dummy is by far (factor of 100s) the
+	   least likely outcome, so test for that last. */
+	for (perturb = hash; ; perturb >>= PERTURB_SHIFT) {
+		i = (i << 2) + i + perturb + 1;
+		ep = &ep0[i & mask];
+		if (ep->me_key == NULL)
+			return freeslot == NULL ? ep : freeslot;
+		if (ep->me_key == key
+		    || (ep->me_hash == hash
+		        && ep->me_key != dummy
+			&& _PyString_Eq(ep->me_key, key)))
+			return ep;
+		if (ep->me_key == dummy && freeslot == NULL)
+			freeslot = ep;
+	}
+	assert(0);	/* NOT REACHED */
+	return 0;
+}
+
+/* Sets the strict lookup function for the dictionary. */
+
+void
+_Py_dict_set_strict_lookup(PyObject *dp) {
+	if (dp)
+		((PyDictObject *) dp)->ma_lookup = strict_lookdict_string;
+}
+
+/* It's the same as PyDict_GetItem, but uses a precalculated hash value.
+   Also, there's no need to check if op is a dictionary, because it's for sure.
+   Used only on compiler.c for dictionaries holding consts, names, etc.
+*/
+PyObject *
+_Py_dict_get_item_with_hash(PyObject *op, PyObject *key, long hash)
+{
+	PyDictObject *mp = (PyDictObject *)op;
+	PyDictEntry *ep;
+	PyThreadState *tstate;
+	/* We can arrive here with a NULL tstate during initialization:
+	   try running "python -Wi" for an example related to string
+	   interning.  Let's just hope that no exception occurs then... */
+	tstate = _PyThreadState_Current;
+	if (tstate != NULL && tstate->curexc_type != NULL) {
+		/* preserve the existing exception */
+		PyObject *err_type, *err_value, *err_tb;
+		PyErr_Fetch(&err_type, &err_value, &err_tb);
+		ep = (mp->ma_lookup)(mp, key, hash);
+		/* ignore errors */
+		PyErr_Restore(err_type, err_value, err_tb);
+		if (ep == NULL)
+			return NULL;
+	}
+	else {
+		ep = (mp->ma_lookup)(mp, key, hash);
+		if (ep == NULL) {
+			PyErr_Clear();
+			return NULL;
+		}
+	}
+	return ep->me_value;
+}
+
+int
+_Py_dict_set_item_with_hash(register PyObject *op, PyObject *key, PyObject *value, long hash)
+{
+	register PyDictObject *mp = (PyDictObject *)op;
+	register Py_ssize_t n_used;
+
+	assert(mp->ma_fill <= mp->ma_mask);  /* at least one empty slot */
+	n_used = mp->ma_used;
+	Py_INCREF(value);
+	Py_INCREF(key);
+	if (insertdict(mp, key, hash, value) != 0)
+		return -1;
+	if (!(mp->ma_used > n_used && mp->ma_fill*3 >= (mp->ma_mask+1)*2))
+		return 0;
+	return dictresize(mp, (mp->ma_used > 50000 ? 2 : 4) * mp->ma_used);
+}
+
+PyObject *
+_Py_dict_deep_copy(register PyObject *a)
+{
+	PyDictObject *mp;
+	register Py_ssize_t len;
+	PyDictEntry *entries;
+	mp = (PyDictObject *) _PyDict_NewPresized(((PyDictObject *) a)->ma_used);
+	if (mp == NULL)
+		return NULL;
+	entries = ((PyDictObject *) a)->ma_table;
+	len = ((PyDictObject *) a)->ma_mask;
+	while (len-- >= 0) {
+		register PyDictEntry *entry = entries++;
+		register PyObject *v = entry->me_value;
+		if (v != NULL) {
+			Py_INCREF(v);
+			if (PyTuple_CheckExact(v)) {
+				PyObject *w = _Py_tuple_deep_copy(v);
+				Py_DECREF(v);
+				if (!w)	{
+					Py_DECREF(mp);
+					return NULL;
+				}
+				v = w;
+			}
+			else if (PyList_CheckExact(v)) {
+				PyObject *w = _Py_list_deep_copy(v);
+				Py_DECREF(v);
+				if (!w)	{
+					Py_DECREF(mp);
+					return NULL;
+				}
+				v = w;
+			}
+			else if (PyDict_CheckExact(v)) {
+				PyObject *w = _Py_dict_deep_copy(v);
+				Py_DECREF(v);
+				if (!w)	{
+					Py_DECREF(mp);
+					return NULL;
+				}
+				v = w;
+			}
+			Py_INCREF(entry->me_key);
+			if (insertdict(mp, entry->me_key, (long)entry->me_hash, v) != 0) {
+				Py_DECREF(entry->me_key);
+				Py_DECREF(v);
+				return NULL;
+			}
+		}
+	}
+	return (PyObject *) mp;
+}
+
 /* For backward compatibility with old dictionary interface */
 
 PyObject *

@@ -786,6 +786,102 @@ PyTypeObject PyTuple_Type = {
 	PyObject_GC_Del,        		/* tp_free */
 };
 
+/* Defined for compile.c in wordcode-based Pythons */
+
+long
+_Py_tuple_relaxed_hash(PyTupleObject *v)
+{
+	register long x, y;
+	register Py_ssize_t len = Py_SIZE(v);
+	register PyObject **p;
+	long mult = 1000003L;
+	x = 0x345678L;
+	p = v->ob_item;
+	while (--len >= 0) {
+		y = _Py_object_relaxed_hash(*p++);
+		if (y == -1)
+			return -1;
+		x = (x ^ y) * mult;
+		/* the cast might truncate len; that doesn't change hash stability */
+		mult += (long)(82520L + len + len);
+	}
+	x += 97531L;
+	if (x == -1)
+		x = -2;
+	return x;
+}
+
+int
+_Py_tuple_strict_equal(PyTupleObject *vt, PyTupleObject *wt)
+{
+	register PyObject **p, **q;
+	PyObject *a, *b;
+	Py_ssize_t len = Py_SIZE(vt);
+	if (len != Py_SIZE(wt))
+		return 0;
+	p = vt->ob_item;
+	q = wt->ob_item;
+	while (--len >= 0) {
+		a = *p++;
+		b = *q++;
+		if (a->ob_type != b->ob_type)
+			return 0;
+		else {
+			register int result = _Py_object_strict_equal(a, b);
+			if (result <= 0)
+				return result;
+		}
+	}
+	return 1;
+}
+
+PyObject *
+_Py_tuple_deep_copy(register PyObject *a)
+{
+	PyTupleObject *np;
+	PyObject **src, **dest;
+	register Py_ssize_t i;
+	Py_ssize_t len = Py_SIZE(a);
+	np = (PyTupleObject *)PyTuple_New(len);
+	if (np == NULL)
+		return NULL;
+	src = ((PyTupleObject *) a)->ob_item;
+	dest = np->ob_item;
+	for (i = 0; i < len; i++) {
+		register PyObject *v = src[i];
+		Py_INCREF(v);
+		if (PyTuple_CheckExact(v)) {
+			PyObject *w = _Py_tuple_deep_copy(v);
+			Py_DECREF(v);
+			if (!w)	{
+				Py_DECREF(np);
+				return NULL;
+			}
+			v = w;
+		}
+		else if (PyList_CheckExact(v)) {
+			PyObject *w = _Py_list_deep_copy(v);
+			Py_DECREF(v);
+			if (!w)	{
+				Py_DECREF(np);
+				return NULL;
+			}
+			v = w;
+		}
+		else if (PyDict_CheckExact(v)) {
+			PyObject *w = _Py_dict_deep_copy(v);
+			Py_DECREF(v);
+			if (!w)	{
+				Py_DECREF(np);
+				return NULL;
+			}
+			v = w;
+		}
+		dest[i] = v;
+	}
+	return (PyObject *)np;
+}
+
 /* The following function breaks the notion that tuples are immutable:
    it changes the size of a tuple.  We get away with this only if there
    is only one module referencing the object.  You can also think of it

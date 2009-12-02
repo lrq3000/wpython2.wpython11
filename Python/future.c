@@ -107,7 +107,9 @@ future_parse(PyFutureFeatures *ff, mod_ty mod, const char *filename)
 		}
 		else if (s->kind == Expr_kind && !found_docstring) {
 			expr_ty e = s->v.Expr.value;
-			if (e->kind != Str_kind)
+			if (e->kind != Str_kind && (e->kind != Const_kind ||
+			(!PyString_CheckExact(s->v.Expr.value->v.Const.c) &&
+			 !PyUnicode_CheckExact(s->v.Expr.value->v.Const.c))))
 				done = 1;
 			else
 				found_docstring = 1;

@@ -95,6 +95,10 @@ PyAPI_FUNC(int) PyCode_CheckLineNumber(PyCodeObject* co,
 PyAPI_FUNC(PyObject*) PyCode_Optimize(PyObject *code, PyObject* consts,
                                       PyObject *names, PyObject *lineno_obj);
 
+/* Defined for compile.c in wordcode-based Pythons */
+
+int _Py_code_strict_equal(PyCodeObject *co, PyCodeObject *cp);
+
 #ifdef __cplusplus
 }
 #endif

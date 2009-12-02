@@ -1276,6 +1276,7 @@ symtable_visit_expr(struct symtable *st, expr_ty e)
 		break;
         case Num_kind:
         case Str_kind:
+        case Const_kind:
 		/* Nothing to do here. */
 		break;
 	/* The following exprs can be assignment targets. */

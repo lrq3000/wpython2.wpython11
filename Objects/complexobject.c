@@ -995,16 +995,16 @@ complex_subtype_from_string(PyTypeObject *type, PyObject *v)
 			}
 			errno = 0;
 			PyFPE_START_PROTECT("strtod", return 0)
-			z = PyOS_ascii_strtod(s, &end) ;
+				z = PyOS_ascii_strtod(s, &end) ;
 			PyFPE_END_PROTECT(z)
 			if (errno == ERANGE && fabs(z) >= 1.0) {
-				PyOS_snprintf(buffer, sizeof(buffer),
-					"float() out of range: %.150s", s);
-				PyErr_SetString(
-					PyExc_ValueError,
-					buffer);
-				return NULL;
-			}
+					PyOS_snprintf(buffer, sizeof(buffer),
+					  "float() out of range: %.150s", s);
+					PyErr_SetString(
+						PyExc_ValueError,
+						buffer);
+					return NULL;
+				}
 			s=end;
 			if  (*s=='J' || *s=='j') {
 
@@ -1269,5 +1269,39 @@ PyTypeObject PyComplex_Type = {
 	complex_new,				/* tp_new */
 	PyObject_Del,           		/* tp_free */
 };
+
+int
+_py_complex_strict_equal(PyComplexObject *a, PyComplexObject *b)
+{
+	register PyObject *z = complex_richcompare((PyObject *) a, (PyObject *) b, Py_EQ);
+	register int result;
+	if (!z)
+		return -1;
+	if (z == Py_NotImplemented) {
+		Py_DECREF(z);
+		return -1;
+	}
+	result = z == Py_True;
+	Py_DECREF(z);
+	if (result) {
+		if ((a->cval.real == 0.0) && (b->cval.real == 0.0)) {
+			register unsigned char *p, *q;
+			p = (unsigned char *) &a->cval.real;
+			q = (unsigned char *) &b->cval.real;
+			/* distinguish 0.0 from -0.0 on IEEE platforms */
+			result &= (*p == *q) &
+				   (p[sizeof(double) - 1] == q[sizeof(double) - 1]);
+		}
+		if ((a->cval.imag == 0.0) && (b->cval.imag == 0.0)) {
+			register unsigned char *p, *q;
+			p = (unsigned char *) &a->cval.imag;
+			q = (unsigned char *) &b->cval.imag;
+			/* distinguish 0.0 from -0.0 on IEEE platforms */
+			result &= (*p == *q) &
+				   (p[sizeof(double) - 1] == q[sizeof(double) - 1]);
+		}
+	}
+	return result;
+}
 
 #endif

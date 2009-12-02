@@ -62,6 +62,13 @@ PyAPI_FUNC(PyObject *) _PyList_Extend(PyListObject *, PyObject *);
 #define PyList_SET_ITEM(op, i, v) (((PyListObject *)(op))->ob_item[i] = (v))
 #define PyList_GET_SIZE(op)    Py_SIZE(op)
 
+/* Defined for compile.c in wordcode-based Pythons. */
+
+long _Py_list_relaxed_hash(PyListObject *v);
+int _Py_list_strict_equal(PyListObject *vl, PyListObject *wl);
+int _Py_list_clear(PyObject *);
+PyObject *_Py_list_deep_copy(PyObject *);
+
 #ifdef __cplusplus
 }
 #endif

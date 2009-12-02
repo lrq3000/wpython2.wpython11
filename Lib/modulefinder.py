@@ -16,12 +16,13 @@ else:
     # remain compatible with Python  < 2.3
     READ_MODE = "r"
 
-LOAD_CONST = chr(dis.opname.index('LOAD_CONST'))
-IMPORT_NAME = chr(dis.opname.index('IMPORT_NAME'))
-STORE_NAME = chr(dis.opname.index('STORE_NAME'))
-STORE_GLOBAL = chr(dis.opname.index('STORE_GLOBAL'))
-STORE_OPS = [STORE_NAME, STORE_GLOBAL]
-HAVE_ARGUMENT = chr(dis.HAVE_ARGUMENT)
+LOAD_CONSTS = dis.opmap['LOAD_CONSTS']
+IMPORT_NAME = dis.opmap['IMPORT_NAME']
+STORE_NAME = dis.opmap['STORE_NAME']
+STORE_GLOBAL = dis.opmap['STORE_GLOBAL']
+STORE_OPS = frozenset((STORE_NAME, STORE_GLOBAL))
+HAVE_ARGUMENT = dis.HAVE_ARGUMENT
+get_extended_opcode = dis.get_extended_opcode
 
 # Modulefinder does a good job at simulating Python's, but it can not
 # handle __path__ modifications packages make at runtime.  Therefore there
@@ -340,67 +341,38 @@ class ModuleFinder:
     def scan_opcodes(self, co,
                      unpack = struct.unpack):
         # Scan the code, and yield 'interesting' opcode combinations
-        # Version for Python 2.4 and older
+        # Python 2.6 WordCode version (has absolute and relative imports)
         code = co.co_code
+        n = len(code)
         names = co.co_names
         consts = co.co_consts
-        while code:
-            c = code[0]
-            if c in STORE_OPS:
-                oparg, = unpack('<H', code[1:3])
-                yield "store", (names[oparg],)
-                code = code[3:]
-                continue
-            if c == LOAD_CONST and code[3] == IMPORT_NAME:
-                oparg_1, oparg_2 = unpack('<xHxH', code[:6])
-                yield "import", (consts[oparg_1], names[oparg_2])
-                code = code[6:]
-                continue
-            if c >= HAVE_ARGUMENT:
-                code = code[3:]
-            else:
-                code = code[1:]
-
-    def scan_opcodes_25(self, co,
-                     unpack = struct.unpack):
-        # Scan the code, and yield 'interesting' opcode combinations
-        # Python 2.5 version (has absolute and relative imports)
-        code = co.co_code
-        names = co.co_names
-        consts = co.co_consts
-        LOAD_LOAD_AND_IMPORT = LOAD_CONST + LOAD_CONST + IMPORT_NAME
-        while code:
-            c = code[0]
-            if c in STORE_OPS:
-                oparg, = unpack('<H', code[1:3])
-                yield "store", (names[oparg],)
-                code = code[3:]
-                continue
-            if code[:9:3] == LOAD_LOAD_AND_IMPORT:
-                oparg_1, oparg_2, oparg_3 = unpack('<xHxHxH', code[:9])
-                level = consts[oparg_1]
-                if level == -1: # normal import
-                    yield "import", (consts[oparg_2], names[oparg_3])
-                elif level == 0: # absolute import
-                    yield "absolute_import", (consts[oparg_2], names[oparg_3])
-                else: # relative import
-                    yield "relative_import", (level, consts[oparg_2], names[oparg_3])
-                code = code[9:]
-                continue
-            if c >= HAVE_ARGUMENT:
-                code = code[3:]
-            else:
-                code = code[1:]
+        op1 = oparg_1 = None
+        i = 0
+        while i < n:
+            op = ord(code[i])
+            oparg = ord(code[i + 1])
+            i += 2
+            if op >= HAVE_ARGUMENT:
+                op, oparg, size = get_extended_opcode(code, i, op, oparg)
+                i += size + size
+                if op in STORE_OPS:
+                    yield "store", names[oparg]
+                elif op1 == LOAD_CONSTS and op == IMPORT_NAME:
+                    level, fromlist = consts[oparg_1]
+                    name = names[oparg]
+                    if level == -1: # normal import
+                        yield "import", (fromlist, name)
+                    elif level == 0: # absolute import
+                        yield "absolute_import", (fromlist, name)
+                    else: # relative import
+                        yield "relative_import", (level, fromlist, name)
+            op1, oparg_1 = op, oparg
 
     def scan_code(self, co, m):
         code = co.co_code
-        if sys.version_info >= (2, 5):
-            scanner = self.scan_opcodes_25
-        else:
-            scanner = self.scan_opcodes
-        for what, args in scanner(co):
+        for what, args in self.scan_opcodes(co):
             if what == "store":
-                name, = args
+                name = args
                 m.globalnames[name] = 1
             elif what in ("import", "absolute_import"):
                 fromlist, name = args
