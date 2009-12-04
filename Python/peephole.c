@@ -1099,7 +1099,7 @@ PyCode_Optimize(PyObject *code, PyObject* consts, PyObject *names,
 						int tgtrawopcode, tgtopcode;
 
 						oparg = EXTRACTARG(rawopcode);
-						tgt = GETJUMPTARGET8(oparg, oparg, i + 1);
+						tgt = GETJUMPTARGET8(opcode, oparg, i + 1);
 						tgtrawopcode = codestr[tgt];
 						tgtopcode = EXTRACTOP(tgtrawopcode);
 						tgttgt = -1;
