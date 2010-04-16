@@ -51,7 +51,7 @@ split_whitespace(char *s, Py_ssize_t len, Py_ssize_t maxsplit)
 			if (item == NULL)
 				goto finally;
 
-			err = PyList_Append(list, item);
+			err = _Py_list_append(list, item);
 			Py_DECREF(item);
 			if (err < 0)
 				goto finally;
@@ -66,7 +66,7 @@ split_whitespace(char *s, Py_ssize_t len, Py_ssize_t maxsplit)
 				if (item == NULL)
 					goto finally;
 
-				err = PyList_Append(list, item);
+				err = _Py_list_append(list, item);
 				Py_DECREF(item);
 				if (err < 0)
 					goto finally;
@@ -125,7 +125,7 @@ strop_splitfields(PyObject *self, PyObject *args)
 			item = PyString_FromStringAndSize(s+j, i-j);
 			if (item == NULL)
 				goto fail;
-			err = PyList_Append(list, item);
+			err = _Py_list_append(list, item);
 			Py_DECREF(item);
 			if (err < 0)
 				goto fail;
@@ -140,7 +140,7 @@ strop_splitfields(PyObject *self, PyObject *args)
 	item = PyString_FromStringAndSize(s+j, len-j);
 	if (item == NULL)
 		goto fail;
-	err = PyList_Append(list, item);
+	err = _Py_list_append(list, item);
 	Py_DECREF(item);
 	if (err < 0)
 		goto fail;

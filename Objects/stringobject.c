@@ -1396,7 +1396,7 @@ static const char *stripformat[] = {"|O:lstrip", "|O:rstrip", "|O:strip"};
 					 (right) - (left));	\
 	if (str == NULL)					\
 		goto onError;					\
-	if (PyList_Append(list, str)) {				\
+	if (_Py_list_append(list, str)) {				\
 		Py_DECREF(str);					\
 		goto onError;					\
 	}							\
@@ -1411,7 +1411,7 @@ static const char *stripformat[] = {"|O:lstrip", "|O:rstrip", "|O:strip"};
 	if (count < MAX_PREALLOC) {				\
 		PyList_SET_ITEM(list, count, str);		\
 	} else {						\
-		if (PyList_Append(list, str)) {			\
+		if (_Py_list_append(list, str)) {			\
 			Py_DECREF(str);				\
 			goto onError;				\
 		}						\

@@ -1015,7 +1015,7 @@ dict_repr(PyDictObject *mp)
 		Py_DECREF(value);
 		if (s == NULL)
 			goto Done;
-		status = PyList_Append(pieces, s);
+		status = _Py_list_append(pieces, s);
 		Py_DECREF(s);  /* append created a new ref */
 		if (status < 0)
 			goto Done;

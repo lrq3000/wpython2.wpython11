@@ -93,6 +93,12 @@ static PyObject * call_function(PyObject ***, int, int, uint64*, uint64*);
 static PyObject * call_function(PyObject ***, int, int);
 #endif
 static PyObject * fast_function(PyObject *, PyObject ***, int, int, int);
+#ifdef WITH_TSC
+static PyObject * exact_args_fast_function(PyObject *, PyObject **, int,
+                                           uint64*, uint64*);
+#else
+static PyObject * exact_args_fast_function(PyObject *, PyObject **, int);
+#endif
 static PyObject * do_call(PyObject *, PyObject ***, int, int);
 static PyObject * ext_do_call(PyObject *, PyObject ***, int, int, int);
 static PyObject * update_keyword_args(PyObject *, int, PyObject ***,
@@ -567,7 +573,7 @@ PyRaise_UnboundLocalError(PyCodeObject *co, int oparg) {
 }
 
 /* Here starts structures and implementations for special opcodes:
-   UNARY_OPS, BINARY_OPS, STACK_OPS. */
+   UNARY_OPS, BINARY_OPS, STACK_OPS, etc. */
 
 static PyObject *
 Py_UNARY_NOT(PyObject *v)
@@ -590,20 +596,6 @@ Py_SLICE_0(PyObject *u)
 {
 	return apply_slice(u, NULL, NULL);
 }
-
-static PyObject *
-(*UNARY_OPS_Table[])(PyObject *) = {
-    PyNumber_Positive,  /* UNARY_POSITIVE */
-    PyNumber_Negative,  /* UNARY_NEGATIVE */
-    Py_UNARY_NOT,  /* UNARY_POSITIVE */
-    PyObject_Repr,  /* UNARY_CONVERT */
-    PyNumber_Invert,  /* UNARY_INVERT */
-    Py_SLICE_0,   /* SLICE_0 */
-    PyObject_GetIter,  /* GET_ITER before: [obj]; after [getiter(obj)] */
-	_Py_tuple_deep_copy, /* TUPLE_DEEP_COPY */
-	_Py_list_deep_copy, /* LIST_DEEP_COPY */
-	_Py_dict_deep_copy  /* DICT_DEEP_COPY */
-};
 
 static PyObject *
 Py_BINARY_POWER(PyObject *v, PyObject *w)
@@ -672,137 +664,11 @@ Py_INPLACE_SUBTRACT(PyObject *v, PyObject *w)
 }
 
 static PyObject *
-Py_SLICE_1(PyObject *u, PyObject *v)
-{
-	return apply_slice(u, v, NULL);
-}
-
-static PyObject *
-Py_SLICE_2(PyObject *u, PyObject *w)
-{
-	return apply_slice(u, NULL, w);
-}
-
-static PyObject *
-Py_BUILD_SLICE_2(PyObject *u, PyObject *v)
-{
-	return PySlice_New(u, v, NULL);
-}
-
-static PyObject *
 Py_CMP_BAD(PyObject *v, PyObject *w)
 {
 	v = v == w ? Py_True : Py_False;
 	Py_INCREF(v);
 	return v;
-}
-
-#define Py3kExceptionClass_Check(x)     \
-    (PyType_Check((x)) &&               \
-     PyType_FastSubclass((PyTypeObject*)(x), Py_TPFLAGS_BASE_EXC_SUBCLASS))
-
-#define CANNOT_CATCH_MSG "catching classes that don't inherit from " \
-			 "BaseException is not allowed in 3.x"
-
-static PyObject *
-Py_CMP_EXC_MATCH(PyObject *v, PyObject *w)
-{
-	int res = 0;
-	if (PyTuple_Check(w)) {
-		Py_ssize_t i, length;
-		length = PyTuple_Size(w);
-		for (i = 0; i < length; i += 1) {
-			PyObject *exc = PyTuple_GET_ITEM(w, i);
-			if (PyString_Check(exc)) {
-				int ret_val;
-				ret_val = PyErr_WarnEx(
-					PyExc_DeprecationWarning,
-					"catching of string "
-					"exceptions is deprecated", 1);
-				if (ret_val < 0)
-					return NULL;
-			}
-			else if (Py_Py3kWarningFlag  &&
-				 !PyTuple_Check(exc) &&
-				 !Py3kExceptionClass_Check(exc))
-			{
-				int ret_val;
-				ret_val = PyErr_WarnEx(
-					PyExc_DeprecationWarning,
-					CANNOT_CATCH_MSG, 1);
-				if (ret_val < 0)
-					return NULL;
-			}
-		}
-	}
-	else {
-		if (PyString_Check(w)) {
-			int ret_val;
-			ret_val = PyErr_WarnEx(
-					PyExc_DeprecationWarning,
-					"catching of string "
-					"exceptions is deprecated", 1);
-			if (ret_val < 0)
-				return NULL;
-		}
-		else if (Py_Py3kWarningFlag  &&
-			 !PyTuple_Check(w) &&
-			 !Py3kExceptionClass_Check(w))
-		{
-			int ret_val;
-			ret_val = PyErr_WarnEx(
-				PyExc_DeprecationWarning,
-				CANNOT_CATCH_MSG, 1);
-			if (ret_val < 0)
-				return NULL;
-		}
-	}
-	res = PyErr_GivenExceptionMatches(v, w);
-	v = res ? Py_True : Py_False;
-	Py_INCREF(v);
-	return v;
-}
-
-static PyObject *
-Py_CMP_IS(PyObject *v, PyObject *w)
-{
-	v = v == w ? Py_True : Py_False;
-	Py_INCREF(v);
-	return v;
-}
-
-static PyObject *
-Py_CMP_IS_NOT(PyObject *v, PyObject *w)
-{
-	v = v != w ? Py_True : Py_False;
-	Py_INCREF(v);
-	return v;
-}
-
-static PyObject *
-Py_CMP_IN(PyObject *v, PyObject *w)
-{
-	int res = PySequence_Contains(w, v);
-	if (res < 0)
-		return NULL;
-	else {
-		v = res ? Py_True : Py_False;
-		Py_INCREF(v);
-		return v;
-	}
-}
-
-static PyObject *
-Py_CMP_NOT_IN(PyObject *v, PyObject *w)
-{
-	int res = PySequence_Contains(w, v);
-	if (res < 0)
-		return NULL;
-	else {
-		v = res ? Py_False : Py_True;
-		Py_INCREF(v);
-		return v;
-	}
 }
 
 static PyObject *
@@ -884,73 +750,335 @@ Py_CMP_GE(PyObject *v, PyObject *w)
 }
 
 static PyObject *
-(*BINARY_OPS_Table[])(PyObject *, PyObject *) = {
-    Py_BINARY_POWER,  /* BINARY_POWER */
-    PyNumber_Multiply,  /* BINARY_MULTIPLY */
-    PyNumber_Divide,  /* BINARY_DIVIDE */
-    PyNumber_TrueDivide,  /* BINARY_TRUE_DIVIDE */
-    PyNumber_FloorDivide,   /* BINARY_FLOOR_DIVIDE */
-    PyNumber_Remainder,   /* BINARY_MODULO */
-    Py_BINARY_SUBTRACT,   /* BINARY_SUBTRACT */
-    Py_BINARY_SUBSCR,   /* BINARY_SUBSCR */
-    PyNumber_Lshift,   /* BINARY_LSHIFT */
-    PyNumber_Rshift,   /* BINARY_RSHIFT */
-    PyNumber_And,   /* BINARY_AND */
-    PyNumber_Xor,   /* BINARY_XOR */
-    PyNumber_Or,   /* BINARY_OR */
-    Py_INPLACE_POWER,   /* INPLACE_POWER */
-    PyNumber_InPlaceMultiply,   /* INPLACE_MULTIPLY */
-    PyNumber_InPlaceDivide,   /* INPLACE_DIVIDE */
-    PyNumber_InPlaceTrueDivide,   /* INPLACE_TRUE_DIVIDE */
-    PyNumber_InPlaceFloorDivide,   /* INPLACE_FLOOR_DIVIDE */
-    PyNumber_InPlaceRemainder,   /* INPLACE_MODULO */
-    Py_INPLACE_SUBTRACT,   /* INPLACE_SUBTRACT */
-    PyNumber_InPlaceLshift,   /* INPLACE_LSHIFT */
-    PyNumber_InPlaceRshift,   /* INPLACE_RSHIFT */
-    PyNumber_InPlaceAnd,   /* INPLACE_AND */
-    PyNumber_InPlaceXor,   /* INPLACE_XOR */
-    PyNumber_InPlaceOr,   /* INPLACE_OR */
-    Py_SLICE_1,   /* SLICE_1 */
-    Py_SLICE_2,   /* SLICE_2 */
-    Py_BUILD_SLICE_2, /* BUILD_SLICE_2 */
-    Py_CMP_BAD,   /* CMP_BAD */
-    Py_CMP_EXC_MATCH,  /* CMP_EXC_MATCH */
-    Py_CMP_IS,  /* CMP_IS */
-    Py_CMP_IS_NOT,  /* CMP_IS_NOT */
-    Py_CMP_IN,  /* CMP_IN */
-    Py_CMP_NOT_IN,  /* CMP_NOT_IN */
-    Py_CMP_LT,  /* CMP_LT */
-    Py_CMP_LE,  /* CMP_LE */
-    Py_CMP_EQ,  /* CMP_EQ */
-    Py_CMP_NE,  /* CMP_NE */
-    Py_CMP_GT,  /* CMP_GT */
-    Py_CMP_GE   /* CMP_GE */
-};
-
-
-void _PyEval_SetQnewFlag(int new_value)
+Py_CMP_IS(PyObject *v, PyObject *w)
 {
-	_Py_QnewFlag = new_value;
-	if (new_value)
-	{
-		BINARY_OPS_Table[BINARY_DIVIDE >> 8] = PyNumber_TrueDivide;
-		BINARY_OPS_Table[INPLACE_DIVIDE >> 8] = PyNumber_InPlaceTrueDivide;
-	}
-	else
-	{
-		BINARY_OPS_Table[BINARY_DIVIDE >> 8] = PyNumber_Divide;
-		BINARY_OPS_Table[INPLACE_DIVIDE >> 8] = PyNumber_InPlaceDivide;
+	v = v == w ? Py_True : Py_False;
+	Py_INCREF(v);
+	return v;
+}
+
+static PyObject *
+Py_CMP_IS_NOT(PyObject *v, PyObject *w)
+{
+	v = v != w ? Py_True : Py_False;
+	Py_INCREF(v);
+	return v;
+}
+
+static PyObject *
+Py_CMP_IN(PyObject *v, PyObject *w)
+{
+	int res = PySequence_Contains(w, v);
+	if (res < 0)
+		return NULL;
+	else {
+		v = res ? Py_True : Py_False;
+		Py_INCREF(v);
+		return v;
 	}
 }
 
+static PyObject *
+Py_CMP_NOT_IN(PyObject *v, PyObject *w)
+{
+	int res = PySequence_Contains(w, v);
+	if (res < 0)
+		return NULL;
+	else {
+		v = res ? Py_False : Py_True;
+		Py_INCREF(v);
+		return v;
+	}
+}
+
+#define Py3kExceptionClass_Check(x)     \
+    (PyType_Check((x)) &&               \
+     PyType_FastSubclass((PyTypeObject*)(x), Py_TPFLAGS_BASE_EXC_SUBCLASS))
+
+#define CANNOT_CATCH_MSG "catching classes that don't inherit from " \
+			 "BaseException is not allowed in 3.x"
 
 static PyObject *
-(*TERNARY_OPS_Table[])(PyObject *, PyObject *, PyObject *) = {
-    apply_slice,  /* SLICE_3 */
-    PySlice_New,  /* BUILD_SLICE_3 */
-    build_class   /* BUILD_CLASS */
-};
+Py_CMP_EXC_MATCH(PyObject *v, PyObject *w)
+{
+	int res = 0;
+	if (PyTuple_Check(w)) {
+		Py_ssize_t i, length;
+		length = PyTuple_Size(w);
+		for (i = 0; i < length; i += 1) {
+			PyObject *exc = PyTuple_GET_ITEM(w, i);
+			if (PyString_Check(exc)) {
+				int ret_val;
+				ret_val = PyErr_WarnEx(
+					PyExc_DeprecationWarning,
+					"catching of string "
+					"exceptions is deprecated", 1);
+				if (ret_val < 0)
+					return NULL;
+			}
+			else if (Py_Py3kWarningFlag  &&
+				 !PyTuple_Check(exc) &&
+				 !Py3kExceptionClass_Check(exc))
+			{
+				int ret_val;
+				ret_val = PyErr_WarnEx(
+					PyExc_DeprecationWarning,
+					CANNOT_CATCH_MSG, 1);
+				if (ret_val < 0)
+					return NULL;
+			}
+		}
+	}
+	else {
+		if (PyString_Check(w)) {
+			int ret_val;
+			ret_val = PyErr_WarnEx(
+					PyExc_DeprecationWarning,
+					"catching of string "
+					"exceptions is deprecated", 1);
+			if (ret_val < 0)
+				return NULL;
+		}
+		else if (Py_Py3kWarningFlag  &&
+			 !PyTuple_Check(w) &&
+			 !Py3kExceptionClass_Check(w))
+		{
+			int ret_val;
+			ret_val = PyErr_WarnEx(
+				PyExc_DeprecationWarning,
+				CANNOT_CATCH_MSG, 1);
+			if (ret_val < 0)
+				return NULL;
+		}
+	}
+	res = PyErr_GivenExceptionMatches(v, w);
+	v = res ? Py_True : Py_False;
+	Py_INCREF(v);
+	return v;
+}
 
+static PyObject *
+Py_SLICE_1(PyObject *u, PyObject *v)
+{
+	return apply_slice(u, v, NULL);
+}
+
+static PyObject *
+Py_SLICE_2(PyObject *u, PyObject *w)
+{
+	return apply_slice(u, NULL, w);
+}
+
+static PyObject *
+Py_BUILD_SLICE_2(PyObject *u, PyObject *v)
+{
+	return PySlice_New(u, v, NULL);
+}
+
+static PyObject *
+Py_GET_GENERATOR(PyObject *v, PyObject *w)
+{
+    w = PyObject_GetIter(w);
+    if (!w)
+        return NULL;
+	PCALL(PCALL_ALL);
+#ifdef WITH_TSC
+    v = exact_args_fast_function(v, &w, 1, &intr0, &intr1);
+#else
+    v = exact_args_fast_function(v, &w, 1);
+#endif
+	Py_DECREF(w);
+    return v;
+}
+
+#ifdef WPY_SMALLINT_SUPER_INSTRUCTIONS
+
+static PyObject *
+Py_INT_BINARY_POWER(register long a, register long b)
+{
+    _Py_Int_FallBackOperation(PyInt_FromLong,
+        PyInt_Type.tp_as_number->nb_power(v, w, Py_None));
+}
+
+static PyObject *
+Py_INT_BINARY_DIVIDE(register long a, register long b)
+{
+	long d, m;
+	if (Py_DivisionWarningFlag &&
+	    PyErr_Warn(PyExc_DeprecationWarning, "classic int division") < 0)
+		return NULL;
+	switch (_Py_i_divmod(a, b, &d, &m)) {
+	case DIVMOD_OK:
+		return PyInt_FromLong(d);
+    case DIVMOD_OVERFLOW:
+        _Py_Int_FallBackOperation(PyLong_FromLong,
+            PyLong_Type.tp_as_number->nb_divide(v, w));
+	default:
+		return NULL;
+	}
+}
+
+static PyObject *
+Py_INT_BINARY_TRUE_DIVIDE(register long a, register long b)
+{
+    _Py_Int_FallBackOperation(PyFloat_FromDouble,
+        PyFloat_Type.tp_as_number->nb_true_divide(v, w));
+}
+
+static PyObject *
+Py_INT_BINARY_FLOOR_DIVIDE(register long a, register long b)
+{
+	long d, m;
+	switch (_Py_i_divmod(a, b, &d, &m)) {
+	case DIVMOD_OK:
+		return PyInt_FromLong(d);
+    case DIVMOD_OVERFLOW:
+        _Py_Int_FallBackOperation(PyLong_FromLong,
+            PyLong_Type.tp_as_number->nb_floor_divide(v, w));
+	default:
+		return NULL;
+	}
+}
+
+static PyObject *
+Py_INT_BINARY_MODULO(register long a, register long b)
+{
+	long d, m;
+	switch (_Py_i_divmod(a, b, &d, &m)) {
+	case DIVMOD_OK:
+		return PyInt_FromLong(m);
+    case DIVMOD_OVERFLOW:
+        _Py_Int_FallBackOperation(PyLong_FromLong,
+            PyLong_Type.tp_as_number->nb_remainder(v, w));
+	default:
+		return NULL;
+	}
+}
+
+static PyObject *
+Py_INT_BINARY_SUBTRACT(register long a, register long b)
+{
+	register long x = a - b;
+	if ((x^a) >= 0 || (x^~b) >= 0)
+		return PyInt_FromLong(x);
+    _Py_Int_FallBackOperation(PyLong_FromLong,
+        PyLong_Type.tp_as_number->nb_subtract(v, w));
+}
+
+static PyObject *
+Py_INT_BINARY_UNSUBSCRIPTABLE(register long a, register long b)
+{
+	PyErr_Format(PyExc_TypeError, "'%.200s' object is unsubscriptable",
+        PyInt_Type.tp_name);
+    return NULL;
+}
+
+static PyObject *
+Py_INT_BINARY_AND(register long a, register long b)
+{
+    return PyInt_FromLong(a & b);
+}
+
+static PyObject *
+Py_INT_BINARY_XOR(register long a, register long b)
+{
+    return PyInt_FromLong(a ^ b);
+}
+
+static PyObject *
+Py_INT_BINARY_OR(register long a, register long b)
+{
+    return PyInt_FromLong(a | b);
+}
+
+static PyObject *
+Py_INT_BINARY_ADD2(register long a, register long b)
+{
+	register long x = a + b;
+	if ((x^a) >= 0 || (x^b) >= 0)
+		return PyInt_FromLong(x);
+    _Py_Int_FallBackOperation(PyLong_FromLong,
+        PyLong_Type.tp_as_number->nb_add(v, w));
+}
+
+static PyObject *
+Py_INT_BAD(register long a, register long b)
+{
+    return NULL;
+}
+
+static PyObject *
+Py_INT_CMP_LT(register long a, register long b)
+{
+	register PyObject *v = a < b ? Py_True : Py_False;
+	Py_INCREF(v);
+	return v;
+}
+
+static PyObject *
+Py_INT_CMP_LE(register long a, register long b)
+{
+	register PyObject *v = a <= b ? Py_True : Py_False;
+	Py_INCREF(v);
+	return v;
+}
+
+static PyObject *
+Py_INT_CMP_EQ(register long a, register long b)
+{
+	register PyObject *v = a == b ? Py_True : Py_False;
+	Py_INCREF(v);
+	return v;
+}
+
+static PyObject *
+Py_INT_CMP_NE(register long a, register long b)
+{
+	register PyObject *v = a != b ? Py_True : Py_False;
+	Py_INCREF(v);
+	return v;
+}
+
+static PyObject *
+Py_INT_CMP_GT(register long a, register long b)
+{
+	register PyObject *v = a > b ? Py_True : Py_False;
+	Py_INCREF(v);
+	return v;
+}
+
+static PyObject *
+Py_INT_CMP_GE(register long a, register long b)
+{
+	register PyObject *v = a >= b ? Py_True : Py_False;
+	Py_INCREF(v);
+	return v;
+}
+
+static PyObject *
+Py_INT_CMP_IN(register long a, register long b)
+{
+	PyErr_Format(PyExc_TypeError, "argument of type '%.200s' is not iterable",
+        PyInt_Type.tp_name);
+    return NULL;
+}
+
+static PyObject *
+Py_INT_CMP_NOT_IN(register long a, register long b)
+{
+	PyErr_Format(PyExc_TypeError, "argument of type '%.200s' is not iterable",
+        PyInt_Type.tp_name);
+    return NULL;
+}
+
+static PyObject *
+Py_INT_GET_GENERATOR(register long a, register long b)
+{
+	PyErr_Format(PyExc_TypeError, "argument of type '%.200s' is not iterable",
+        PyInt_Type.tp_name);
+    return NULL;
+}
+#endif
 
 static PyObject **
 STACK_DECL(Py_POP_TOP)
@@ -1035,20 +1163,27 @@ STACK_DECL(Py_DUP_TOP_THREE)
 }
 
 static PyObject **
-#ifdef LLTRACE
-(*STACK_OPS_Table[])(PyObject **, PyCodeObject *, PyFrameObject *) = {
-#else
-(*STACK_OPS_Table[])(PyObject **) = {
-#endif
-    Py_POP_TOP,  /* POP_TOP */
-    Py_ROT_TWO,  /* ROT_TWO */
-    Py_ROT_THREE,  /* ROT_THREE */
-    Py_ROT_FOUR,  /* ROT_FOUR */
-    Py_DUP_TOP,   /* DUP_TOP */
-    Py_DUP_TOP_TWO,   /* DUP_TOP_TWO */
-    Py_DUP_TOP_THREE   /* DUP_TOP_THREE */
-};
+STACK_DECL(Py_DUP_TOP_ROT_THREE)
+{
+	register PyObject *v = TOP();
+	register PyObject *w = SECOND();
+	Py_INCREF(v);
+	PUSH(v);
+	SET_SECOND(w);
+	SET_THIRD(v);
+	return stack_pointer;
+}
 
+static PyObject **
+STACK_DECL(Py_ROT_TWO_POP_TOP)
+{
+	register PyObject *v = TOP();
+	register PyObject *w = SECOND();
+	STACKADJ(-1);
+	Py_DECREF(w);
+	SET_TOP(v);
+	return stack_pointer;
+}
 
 static PyObject **
 STACK_ERR_DECL(Py_STORE_SLICE_0)
@@ -1338,6 +1473,157 @@ STACK_ERR_DECL(Py_PRINT_NEWLINE)
 	return stack_pointer;
 }
 
+
+static PyObject *
+(*UNARY_OPS_Table[])(PyObject *) = {
+    PyNumber_Positive,  /* UNARY_POSITIVE */
+    PyNumber_Negative,  /* UNARY_NEGATIVE */
+    Py_UNARY_NOT,  /* UNARY_NOT */
+    PyObject_Repr,  /* UNARY_CONVERT */
+    PyNumber_Invert,  /* UNARY_INVERT */
+    Py_SLICE_0,   /* SLICE_0 */
+    PyObject_GetIter,  /* GET_ITER before: [obj]; after [getiter(obj)] */
+	_Py_tuple_deep_copy, /* TUPLE_DEEP_COPY */
+	_Py_list_deep_copy, /* LIST_DEEP_COPY */
+	_Py_dict_deep_copy  /* DICT_DEEP_COPY */
+};
+
+static PyObject *
+(*BINARY_OPS_Table[])(PyObject *, PyObject *) = {
+    Py_BINARY_POWER,  /* BINARY_POWER */
+    PyNumber_Multiply,  /* BINARY_MULTIPLY */
+    PyNumber_Divide,  /* BINARY_DIVIDE */
+    PyNumber_TrueDivide,  /* BINARY_TRUE_DIVIDE */
+    PyNumber_FloorDivide,   /* BINARY_FLOOR_DIVIDE */
+    PyNumber_Remainder,   /* BINARY_MODULO */
+    Py_BINARY_SUBTRACT,   /* BINARY_SUBTRACT */
+    Py_BINARY_SUBSCR,   /* BINARY_SUBSCR */
+    PyNumber_Lshift,   /* BINARY_LSHIFT */
+    PyNumber_Rshift,   /* BINARY_RSHIFT */
+
+    PyNumber_And,   /* BINARY_AND */
+    PyNumber_Xor,   /* BINARY_XOR */
+    PyNumber_Or,   /* BINARY_OR */
+    PyNumber_Add,   /* BINARY_ADD2 */
+    Py_INPLACE_POWER,   /* INPLACE_POWER */
+    PyNumber_InPlaceMultiply,   /* INPLACE_MULTIPLY */
+    PyNumber_InPlaceDivide,   /* INPLACE_DIVIDE */
+    PyNumber_InPlaceTrueDivide,   /* INPLACE_TRUE_DIVIDE */
+    PyNumber_InPlaceFloorDivide,   /* INPLACE_FLOOR_DIVIDE */
+    PyNumber_InPlaceRemainder,   /* INPLACE_MODULO */
+
+    Py_INPLACE_SUBTRACT,   /* INPLACE_SUBTRACT */
+    PyNumber_InPlaceLshift,   /* INPLACE_LSHIFT */
+    PyNumber_InPlaceRshift,   /* INPLACE_RSHIFT */
+    PyNumber_InPlaceAnd,   /* INPLACE_AND */
+    PyNumber_InPlaceXor,   /* INPLACE_XOR */
+    PyNumber_InPlaceOr,   /* INPLACE_OR */
+    PyNumber_InPlaceAdd,   /* INPLACE_ADD2 */
+    Py_CMP_BAD,   /* CMP_BAD */
+    Py_CMP_LT,  /* CMP_LT */
+    Py_CMP_LE,  /* CMP_LE */
+
+    Py_CMP_EQ,  /* CMP_EQ */
+    Py_CMP_NE,  /* CMP_NE */
+    Py_CMP_GT,  /* CMP_GT */
+    Py_CMP_GE,  /* CMP_GE */
+    Py_CMP_IS,  /* CMP_IS */
+    Py_CMP_IS_NOT,  /* CMP_IS_NOT */
+    Py_CMP_IN,  /* CMP_IN */
+    Py_CMP_NOT_IN,  /* CMP_NOT_IN */
+    Py_CMP_EXC_MATCH,  /* CMP_EXC_MATCH */
+    Py_SLICE_1,   /* SLICE_1 */
+
+    Py_SLICE_2,   /* SLICE_2 */
+    Py_BUILD_SLICE_2, /* BUILD_SLICE_2 */
+    Py_GET_GENERATOR, /* GET_GENERATOR */
+    PyString_Format, /* STRING_MODULO */
+    PyUnicode_Format, /* UNICODE_MODULO */
+    _PyString_Join, /* STRING_JOIN */
+    PyUnicode_Join, /* UNICODE_JOIN */
+};
+
+#ifdef WPY_SMALLINT_SUPER_INSTRUCTIONS
+static PyObject *
+(*INT_BINARY_OPS_Table[])(register long, register long) = {
+    Py_INT_BINARY_POWER,  /* BINARY_POWER */
+    _Py_int_mul,  /* BINARY_MULTIPLY */
+    Py_INT_BINARY_DIVIDE,  /* BINARY_DIVIDE */
+    Py_INT_BINARY_TRUE_DIVIDE,  /* BINARY_TRUE_DIVIDE */
+    Py_INT_BINARY_FLOOR_DIVIDE,   /* BINARY_FLOOR_DIVIDE */
+    Py_INT_BINARY_MODULO,   /* BINARY_MODULO */
+    Py_INT_BINARY_SUBTRACT,   /* BINARY_SUBTRACT */
+    Py_INT_BINARY_UNSUBSCRIPTABLE,   /* BINARY_SUBSCR */
+    _Py_int_lshift,   /* BINARY_LSHIFT */
+    _Py_int_rshift,   /* BINARY_RSHIFT */
+
+    Py_INT_BINARY_AND,   /* BINARY_AND */
+    Py_INT_BINARY_XOR,   /* BINARY_XOR */
+    Py_INT_BINARY_OR,   /* BINARY_OR */
+    Py_INT_BINARY_ADD2,   /* BINARY_ADD2 */
+    Py_INT_BINARY_POWER,  /* INPLACE_POWER */
+    _Py_int_mul,  /* INPLACE_MULTIPLY */
+    Py_INT_BINARY_DIVIDE,  /* INPLACE_DIVIDE */
+    Py_INT_BINARY_TRUE_DIVIDE,  /* INPLACE_TRUE_DIVIDE */
+    Py_INT_BINARY_FLOOR_DIVIDE,   /* INPLACE_FLOOR_DIVIDE */
+    Py_INT_BINARY_MODULO,   /* INPLACE_MODULO */
+
+    Py_INT_BINARY_SUBTRACT,   /* INPLACE_SUBTRACT */
+    _Py_int_lshift,   /* INPLACE_LSHIFT */
+    _Py_int_rshift,   /* INPLACE_RSHIFT */
+    Py_INT_BINARY_AND,   /* INPLACE_AND */
+    Py_INT_BINARY_XOR,   /* INPLACE_XOR */
+    Py_INT_BINARY_OR,   /* INPLACE_OR */
+    Py_INT_BINARY_ADD2,   /* INPLACE_ADD2 */
+    Py_INT_BAD,   /* CMP_BAD */
+    Py_INT_CMP_LT,  /* CMP_LT */
+    Py_INT_CMP_LE,  /* CMP_LE */
+
+    Py_INT_CMP_EQ,  /* CMP_EQ */
+    Py_INT_CMP_NE,  /* CMP_NE */
+    Py_INT_CMP_GT,  /* CMP_GT */
+    Py_INT_CMP_GE,  /* CMP_GE */
+    Py_INT_CMP_EQ,  /* CMP_IS */
+    Py_INT_CMP_NE,  /* CMP_IS_NOT */
+    Py_INT_CMP_IN,  /* CMP_IN */
+    Py_INT_CMP_NOT_IN,  /* CMP_NOT_IN */
+    Py_INT_BAD,  /* CMP_EXC_MATCH */
+    Py_INT_BAD,  /* SLICE_1 */
+
+    Py_INT_BAD,  /* SLICE_2 */
+    Py_INT_BAD, /* BUILD_SLICE_2 */
+    Py_INT_GET_GENERATOR, /* GET_GENERATOR */
+    Py_INT_BAD, /* STRING_MODULO */
+    Py_INT_BAD, /* UNICODE_MODULO */
+    Py_INT_BAD, /* STRING_JOIN */
+    Py_INT_BAD, /* UNICODE_JOIN */
+};
+#endif
+
+static PyObject *
+(*TERNARY_OPS_Table[])(PyObject *, PyObject *, PyObject *) = {
+    apply_slice,  /* SLICE_3 */
+    PySlice_New,  /* BUILD_SLICE_3 */
+    build_class   /* BUILD_CLASS */
+};
+
+static PyObject **
+#ifdef LLTRACE
+(*STACK_OPS_Table[])(PyObject **, PyCodeObject *, PyFrameObject *) = {
+#else
+(*STACK_OPS_Table[])(PyObject **) = {
+#endif
+    Py_POP_TOP,  /* POP_TOP */
+    Py_ROT_TWO,  /* ROT_TWO */
+    Py_ROT_THREE,  /* ROT_THREE */
+    Py_ROT_FOUR,  /* ROT_FOUR */
+    Py_DUP_TOP,   /* DUP_TOP */
+    Py_DUP_TOP_TWO,   /* DUP_TOP_TWO */
+    Py_DUP_TOP_THREE,   /* DUP_TOP_THREE */
+    Py_DUP_TOP_ROT_THREE,  /* DUP_TOP_ROT_THREE */
+    Py_ROT_TWO_POP_TOP  /* ROT_TWO_POP_TOP */
+};
+
 static PyObject **
 #ifdef LLTRACE
 (*STACK_ERR_OPS_Table[])(PyObject **, int *, PyCodeObject *, PyFrameObject *) = {
@@ -1361,6 +1647,30 @@ static PyObject **
     Py_PRINT_NEWLINE_TO,  /* PRINT_NEWLINE_TO */
     Py_PRINT_NEWLINE  /* PRINT_NEWLINE */
 };
+
+
+void _PyEval_SetQnewFlag(int new_value)
+{
+	_Py_QnewFlag = new_value;
+	if (new_value)
+	{
+		BINARY_OPS_Table[BINARY_DIVIDE >> 8] = PyNumber_TrueDivide;
+		BINARY_OPS_Table[INPLACE_DIVIDE >> 8] = PyNumber_InPlaceTrueDivide;
+#ifdef WPY_SMALLINT_SUPER_INSTRUCTIONS
+		INT_BINARY_OPS_Table[BINARY_DIVIDE >> 8] = Py_INT_BINARY_TRUE_DIVIDE;
+		INT_BINARY_OPS_Table[INPLACE_DIVIDE >> 8] = Py_INT_BINARY_TRUE_DIVIDE;
+#endif
+	}
+	else
+	{
+		BINARY_OPS_Table[BINARY_DIVIDE >> 8] = PyNumber_Divide;
+		BINARY_OPS_Table[INPLACE_DIVIDE >> 8] = PyNumber_InPlaceDivide;
+#ifdef WPY_SMALLINT_SUPER_INSTRUCTIONS
+		INT_BINARY_OPS_Table[BINARY_DIVIDE >> 8] = Py_INT_BINARY_DIVIDE;
+		INT_BINARY_OPS_Table[INPLACE_DIVIDE >> 8] = Py_INT_BINARY_DIVIDE;
+#endif
+	}
+}
 
 
 /* for manipulating the thread switch and periodic "stuff" - used to be
@@ -1396,6 +1706,8 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 #ifdef DXPAIRS
 	int lastopcode = 0;
 #endif
+
+    extern PyIntObject *_Py_Int_small_ints[_Py_Int_NSMALLNEGINTS + _Py_Int_NSMALLPOSINTS];
 
 	register PyObject **stack_pointer;  /* Next free slot in value stack */
 	register unsigned short *next_instr;
@@ -1552,10 +1864,6 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 								 GETLOCAL(i) = value; \
                                  Py_XDECREF(tmp); \
 							} while (0)
-
-#define CASE(opcode)	case opcode: \
-						case (opcode) + TOTAL_OPCODES: \
-						case (opcode) + TOTAL_OPCODES * 2:
 
 /* Start of code */
 
@@ -1909,12 +2217,13 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			    if (x != NULL) continue;
 			    break;
 
-		    case HIGHCODE(LOAD_LOCALS):
-			    if ((x = f->f_locals) != NULL) {
-				    Py_INCREF(x);
-				    PUSH(x);
-				    continue;
+		    case HIGHCODE(RETURN_LOCALS):
+			    if ((retval = f->f_locals) != NULL) {
+    			    Py_INCREF(retval);
+			        why = WHY_RETURN;
+			        goto fast_block_end;
 			    }
+                x = NULL;
 			    PyErr_SetString(PyExc_SystemError, "no locals");
 			    break;
 
@@ -1958,8 +2267,8 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			    }
 			    continue;
 
-		    PREDICTED(END_FINALLY);
 		    case HIGHCODE(END_FINALLY):
+end_finally_entry:
 			    v = POP();
 			    if (PyInt_Check(v)) {
 				    why = (enum why_code) PyInt_AS_LONG(v);
@@ -2069,8 +2378,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 				    /* The stack was rearranged to remove EXIT
 				       above. Let END_FINALLY do its thing */
 			    }
-			    PREDICT(END_FINALLY);
-			    break;
+			    goto end_finally_entry;
 		    }
 
 		    case HIGHCODE(RAISE_0):
@@ -2116,23 +2424,23 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 
 		case EXTENDED_ARG16:
 		  /* The opcode stays in oparg */
-			opcode = oparg + TOTAL_OPCODES;
+			opcode = oparg;
 			NEXTARG16(oparg);
 			goto dispatch_opcode;
 
 		case EXTENDED_ARG32:
 		  /* The opcode stays in oparg */
-			opcode = oparg + TOTAL_OPCODES * 2;
+			opcode = oparg;
 			NEXTARG32();
 			goto dispatch_opcode;
 
-		CASE(LOAD_CONST)
+        case LOAD_CONST:
 			x = GETITEM(consts, oparg);
 			Py_INCREF(x);
 			PUSH(x);
 			goto fast_next_opcode;
 
-		CASE(LOAD_FAST)
+        case LOAD_FAST:
 			x = GETLOCAL(oparg);
 			if (x != NULL) {
 				Py_INCREF(x);
@@ -2143,12 +2451,12 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			break;
 
 		PREDICTED_WITH_ARG(STORE_FAST);
-		CASE(STORE_FAST)
+        case STORE_FAST:
 			v = POP();
 			SETLOCAL(oparg, v);
 			goto fast_next_opcode;
 
-		CASE(DELETE_FAST)
+        case DELETE_FAST:
 			x = GETLOCAL(oparg);
 			if (x != NULL) {
 				SETLOCAL(oparg, NULL);
@@ -2157,7 +2465,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			PyRaise_UnboundLocalError(co, oparg);
 			break;
 
-		CASE(LOAD_ATTR)
+        case LOAD_ATTR:
 			w = GETITEM(names, oparg);
 			v = TOP();
 			x = PyObject_GetAttr(v, w);
@@ -2166,7 +2474,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			if (x != NULL) continue;
 			break;
 
-		CASE(STORE_ATTR)
+        case STORE_ATTR:
 			w = GETITEM(names, oparg);
 			v = TOP();
 			u = SECOND();
@@ -2177,7 +2485,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			if (err == 0) continue;
 			break;
 
-		CASE(DELETE_ATTR)
+        case DELETE_ATTR:
 			w = GETITEM(names, oparg);
 			v = POP();
 			err = PyObject_SetAttr(v, w, (PyObject *)NULL);
@@ -2185,7 +2493,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			Py_DECREF(v);
 			break;
 
-		CASE(LOAD_GLOBAL)
+        case LOAD_GLOBAL:
 			x = load_global(GETITEM(names, oparg), f);
 			if (x != NULL) {
 				Py_INCREF(x);
@@ -2194,7 +2502,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			}
 			break;
 
-		CASE(STORE_GLOBAL)
+        case STORE_GLOBAL:
 			w = GETITEM(names, oparg);
 			v = POP();
 			err = PyDict_SetItem(f->f_globals, w, v);
@@ -2202,14 +2510,14 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			if (err == 0) continue;
 			break;
 
-		CASE(DELETE_GLOBAL)
+        case DELETE_GLOBAL:
 			w = GETITEM(names, oparg);
 			if ((err = PyDict_DelItem(f->f_globals, w)) != 0)
 				format_exc_check_arg(
 				    PyExc_NameError, GLOBAL_NAME_ERROR_MSG, w);
 			break;
 
-	    case CALL_FUNCTION:
+	    case QUICK_CALL_FUNCTION:
 		{
 			int na, nk;
 			PyObject **sp;
@@ -2223,14 +2531,15 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			x = call_function(&sp, na, nk);
 #endif
 			stack_pointer = sp;
-			PUSH(x);
-			if (x != NULL)
+            if (x != NULL) {
+    			PUSH(x);
 				continue;
+            }
 			break;
 		}
 
 #ifdef WPY_CALL_PROCEDURE
-	    case CALL_PROCEDURE:
+	    case QUICK_CALL_PROCEDURE:
 		{
 			int na, nk;
 			PyObject **sp;
@@ -2252,7 +2561,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 		}
 #endif
 
-		CASE(LOAD_NAME)
+        case LOAD_NAME:
 			w = GETITEM(names, oparg);
 			if ((v = f->f_locals) == NULL) {
 				PyErr_Format(PyExc_SystemError,
@@ -2290,7 +2599,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			PUSH(x);
 			continue;
 
-		CASE(STORE_NAME)
+        case STORE_NAME:
 			w = GETITEM(names, oparg);
 			v = POP();
 			if ((x = f->f_locals) != NULL) {
@@ -2307,7 +2616,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 				     PyObject_REPR(w));
 			break;
 
-		CASE(DELETE_NAME)
+        case DELETE_NAME:
 			w = GETITEM(names, oparg);
 			if ((x = f->f_locals) != NULL) {
 				if ((err = PyObject_DelItem(x, w)) != 0)
@@ -2321,10 +2630,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 				     PyObject_REPR(w));
 			break;
 
-#ifdef CASE_TOO_BIG
-		default: switch (opcode) {
-#endif
-		CASE(MAKE_FUNCTION)
+        case MAKE_FUNCTION:
 			v = POP(); /* code object */
 			x = PyFunction_New(v, f->f_globals);
 			Py_DECREF(v);
@@ -2346,7 +2652,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			PUSH(x);
 			break;
 
-		CASE(LOAD_CONSTS) {
+        case LOAD_CONSTS: {
 			register PyObject **src;
 			x = GETITEM(consts, oparg);
 			err = (Py_ssize_t) Py_SIZE(x);
@@ -2364,19 +2670,17 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			goto fast_next_opcode;
 		}
 
-#ifdef WPY_RETURN_CONST
-		CASE(RETURN_CONST)
+        case RETURN_CONST:
 			retval = GETITEM(consts, oparg);
 			Py_INCREF(retval);
 			why = WHY_RETURN;
 			goto fast_block_end;
-#endif
 
-		CASE(JUMP_FORWARD)
+        case JUMP_FORWARD:
 			JUMPBY(oparg);
 			goto fast_next_opcode;
 
-		CASE(JUMP_ABSOLUTE)
+        case JUMP_ABSOLUTE:
 			JUMPTO(oparg);
 #if FAST_LOOPS
 			/* Enabling this path speeds-up all while and for-loops by bypassing
@@ -2391,7 +2695,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			continue;
 #endif
 
-		CASE(JUMP_IF_FALSE_ELSE_POP)
+        case JUMP_IF_FALSE_ELSE_POP:
 			w = TOP();
 			if (w == Py_True) {
 			    Py_DECREF(w);
@@ -2414,7 +2718,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 				break;
 			continue;
 
-		CASE(JUMP_IF_TRUE_ELSE_POP)
+        case JUMP_IF_TRUE_ELSE_POP:
 			w = TOP();
 			if (w == Py_False) {
 			    Py_DECREF(w);
@@ -2438,7 +2742,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 				break;
 			continue;
 
-		CASE(JUMP_IF_FALSE)
+        case JUMP_IF_FALSE:
 			w = POP();
 			if (w == Py_True) {
 			    Py_DECREF(w);
@@ -2459,7 +2763,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 				break;
 			continue;
 
-		CASE(JUMP_IF_TRUE)
+        case JUMP_IF_TRUE:
 			w = POP();
 			if (w == Py_False) {
 			    Py_DECREF(w);
@@ -2482,7 +2786,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 				break;
 			continue;
 
-		CASE(BUILD_TUPLE)
+        case BUILD_TUPLE:
 			x = PyTuple_New(oparg);
 			if (x != NULL) {
 				for (; --oparg >= 0;) {
@@ -2494,7 +2798,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			}
 			break;
 
-		CASE(BUILD_LIST)
+        case BUILD_LIST:
 			x =  PyList_New(oparg);
 			if (x != NULL) {
 				for (; --oparg >= 0;) {
@@ -2506,13 +2810,13 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			}
 			break;
 
-		CASE(BUILD_MAP)
+        case BUILD_MAP:
 			x = _PyDict_NewPresized((Py_ssize_t)oparg);
 			PUSH(x);
 			if (x != NULL) continue;
 			break;
 
-		CASE(IMPORT_NAME)
+        case IMPORT_NAME:
 			w = GETITEM(names, oparg);
 			x = PyDict_GetItemString(f->f_builtins, "__import__");
 			if (x == NULL) {
@@ -2557,7 +2861,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			if (x != NULL) continue;
 			break;
 
-		CASE(IMPORT_FROM)
+        case IMPORT_FROM:
 			w = GETITEM(names, oparg);
 			v = TOP();
 			READ_TIMESTAMP(intr0);
@@ -2572,25 +2876,19 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			if (x != NULL) continue;
 			break;
 
-		CASE(SETUP_LOOP)
-		CASE(SETUP_EXCEPT)
-		CASE(SETUP_FINALLY)
+        case SETUP_LOOP:
+        case SETUP_EXCEPT:
+        case SETUP_FINALLY:
 			/* NOTE: If you add any new block-setup opcodes that
 		           are not try/except/finally handlers, you may need
 		           to update the PyGen_NeedsFinalizing() function.
 		           */
 
-			err = opcode;
-			if (opcode >= TOTAL_OPCODES)
-				err = opcode >= TOTAL_OPCODES * 2 ?
-					opcode - TOTAL_OPCODES * 2 :
-					opcode - TOTAL_OPCODES;
-			PyFrame_BlockSetup(f, err, INSTR_OFFSET() + oparg,
+			PyFrame_BlockSetup(f, opcode, INSTR_OFFSET() + oparg,
 					   STACK_LEVEL());
-			err = 0;
 			continue;
 
-		CASE(CONTINUE_LOOP)
+        case CONTINUE_LOOP:
 			retval = PyInt_FromLong(oparg);
 			if (!retval) {
 				x = NULL;
@@ -2599,7 +2897,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			why = WHY_CONTINUE;
 			goto fast_block_end;
 
-		CASE(FOR_ITER)
+        case FOR_ITER:
 			/* before: [iter]; after: [iter, iter()] *or* [] */
 			v = TOP();
 			x = (*v->ob_type->tp_iternext)(v);
@@ -2621,11 +2919,11 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			JUMPBY(oparg);
 			continue;
 
-		CASE(LIST_APPEND_LOOP) {
-			register PyObject *w = TOP();
-			register PyObject *v = SECOND();
+        case LIST_APPEND_LOOP: {
+			w = TOP();
+			v = SECOND();
 			STACKADJ(-2);
-			err = PyList_Append(v, w);
+			err = _Py_list_append(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
 			if (err == 0) {
@@ -2646,7 +2944,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			break;
 		}
 
-		CASE(LOAD_DEREF)
+        case LOAD_DEREF:
 			x = freevars[oparg];
 			w = PyCell_Get(x);
 			if (w != NULL) {
@@ -2672,7 +2970,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			}
 			break;
 
-		CASE(STORE_DEREF)
+        case STORE_DEREF:
 			w = POP();
 			x = freevars[oparg];
 			PyCell_Set(x, w);
@@ -2680,7 +2978,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			continue;
 
 		PREDICTED_WITH_ARG(UNPACK_SEQUENCE);
-		CASE(UNPACK_SEQUENCE)
+        case UNPACK_SEQUENCE:
 			v = POP();
 			if (PyTuple_CheckExact(v) &&
 			    PyTuple_GET_SIZE(v) == oparg) {
@@ -2712,14 +3010,14 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			Py_DECREF(v);
 			break;
 
-		CASE(LOAD_CLOSURE)
+        case LOAD_CLOSURE:
 			x = freevars[oparg];
 			Py_INCREF(x);
 			PUSH(x);
 			if (x != NULL) continue;
 			break;
 
-		CASE(MAKE_CLOSURE)
+        case MAKE_CLOSURE:
 		{
 			v = POP(); /* code object */
 			x = PyFunction_New(v, f->f_globals);
@@ -2754,85 +3052,16 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			break;
 		}
 
-	    case CALL_FUNCTION + TOTAL_OPCODES:
-#ifdef WPY_CALL_PROCEDURE
-	    case CALL_PROCEDURE + TOTAL_OPCODES:
+#ifdef CASE_TOO_BIG
+		default: switch (opcode) {
 #endif
-		CASE(CALL_FUNCTION_VAR)
-		CASE(CALL_FUNCTION_KW)
-		CASE(CALL_FUNCTION_VAR_KW)
-#ifdef WPY_CALL_PROCEDURE
-		CASE(CALL_PROCEDURE_VAR)
-		CASE(CALL_PROCEDURE_KW)
-		CASE(CALL_PROCEDURE_VAR_KW)
-#endif
-		{
-		    int na, nk, n;
-		    PyObject **pfunc, *func, **sp;
-			  /* Checks if CALL_FUNCTION was called with the "short"
-			    (8 bit = 4 bit arguments + 4 bit keywords) form or the "long"
-			    (16 bit = 8 bit arguments + 8 bit keywords) one. */
-			if (opcode >= TOTAL_OPCODES) {
-				err = opcode - TOTAL_OPCODES;
-				na = oparg & 0xff;
-				nk = oparg >> 8;
-			}
-			else {
-				err = opcode;
-				na = oparg & 0x0f;
-				nk = oparg >> 4;
-			}
-		    /* opcode & 1 = CALL_FLAG_VAR.
-		      opcode >> 1 & 1 = CALL_FLAG_KW. */
-		    n = na + (nk << 1) + (err & 1) + (err >> 1 & 1);
-		    PCALL(PCALL_ALL);
-		    pfunc = stack_pointer - n - 1;
-		    func = *pfunc;
-
-		    if (PyMethod_Check(func)
-			&& PyMethod_GET_SELF(func) != NULL) {
-			    PyObject *self = PyMethod_GET_SELF(func);
-			    Py_INCREF(self);
-			    func = PyMethod_GET_FUNCTION(func);
-			    Py_INCREF(func);
-			    Py_DECREF(*pfunc);
-			    *pfunc = self;
-			    na++;
-			    n++;
-		    } else
-			    Py_INCREF(func);
-		    sp = stack_pointer;
-		    READ_TIMESTAMP(intr0);
-		    x = ext_do_call(func, &sp, err, na, nk);
-		    READ_TIMESTAMP(intr1);
-		    stack_pointer = sp;
-		    Py_DECREF(func);
-
-		    while (stack_pointer > pfunc) {
-			    w = POP();
-			    Py_DECREF(w);
-		    }
-			/* Discards the result on CALL_PROCEDURE.
-			   To work correctly bit 2 of the opcode is retrieved;
-			   it's 0 for a CALL_FUNCTION and 4 for a CALL_PROCEDURE. */
-#ifdef WPY_CALL_PROCEDURE
-			if (err & 4)
-				Py_XDECREF(x);
-			else
-#endif
-			    PUSH(x); /* It's a CALL_FUNCTION: keep the result on TOP */
-			err = 0;
-		    if (x != NULL)
-			    continue;
-		    break;
-		}
 
 #ifdef WPY_FAST_ADD
 		case FAST_ADD:
 			v = TOP();
-			w = x = GETLOCAL(oparg);
+			x = GETLOCAL(oparg);
 			if (x != NULL) {
-				x = quick_add(v, w, NULL);
+				x = quick_add(v, x, NULL);
 				Py_DECREF(v);
 				SET_TOP(x);
 				if (x != NULL) continue;
@@ -2845,8 +3074,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 #ifdef WPY_CONST_ADD
 		case CONST_ADD:
 			v = TOP();
-			w = GETITEM(consts, oparg);
-			x = quick_add(v, w, NULL);
+			x = quick_add(v, GETITEM(consts, oparg), NULL);
 			Py_DECREF(v);
 			SET_TOP(x);
 			if (x != NULL) continue;
@@ -2904,11 +3132,10 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 
 #ifdef WPY_MOVE_FAST_ATTR_FAST
 		case MOVE_FAST_ATTR_FAST:
-			v = GETLOCAL(oparg);
-			if (v != NULL) {
+			x = GETLOCAL(oparg);
+			if (x != NULL) {
 				NEXTARG16(oparg);
-				w = GETITEM(names, EXTRACTOP(oparg));
-				x = PyObject_GetAttr(v, w);
+				x = PyObject_GetAttr(x, GETITEM(names, EXTRACTOP(oparg)));
 				if (x != NULL) {
 					SETLOCAL(EXTRACTARG(oparg), x);
 					goto fast_next_opcode;
@@ -2921,16 +3148,17 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 
 #ifdef WPY_MOVE_FAST_FAST_ATTR
 		case MOVE_FAST_FAST_ATTR:
-			u = GETLOCAL(oparg);
-			if (u != NULL) {
+			x = GETLOCAL(oparg);
+			if (x != NULL) {
 				NEXTARG16(oparg);
 				v = GETLOCAL(EXTRACTOP(oparg));
 				if (v == NULL) {
+                    x = NULL;
 					PyRaise_UnboundLocalError(co, EXTRACTOP(oparg));
 					break;
 				}
-				w = GETITEM(names, EXTRACTARG(oparg));
-				err = PyObject_SetAttr(v, w, u); /* v.w = u */
+				err = PyObject_SetAttr(v, GETITEM(names, EXTRACTARG(oparg)),
+                                       x); /* v.w = x */
 				if (err == 0) continue;
 				break;
 			}
@@ -2942,13 +3170,13 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 		case MOVE_CONST_FAST_ATTR:
 			u = GETITEM(consts, oparg);
 			NEXTARG16(oparg);
-			v = GETLOCAL(EXTRACTOP(oparg));
-			if (v == NULL) {
+			x = GETLOCAL(EXTRACTOP(oparg));
+			if (x == NULL) {
 				PyRaise_UnboundLocalError(co, EXTRACTOP(oparg));
 				break;
 			}
-			w = GETITEM(names, EXTRACTARG(oparg));
-			err = PyObject_SetAttr(v, w, u); /* v.w = u */
+			/* x.w = u */
+			err = PyObject_SetAttr(x, GETITEM(names, EXTRACTARG(oparg)), u);
 			if (err == 0) continue;
 			break;
 #endif
@@ -2958,27 +3186,27 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			v = GETLOCAL(oparg);
 			if (v != NULL) {
 				NEXTARG16(oparg);
-				w = GETITEM(names, EXTRACTOP(oparg));
-				x = PyObject_GetAttr(v, w);
+				x = PyObject_GetAttr(v, GETITEM(names, EXTRACTOP(oparg)));
 				if (x != NULL) {
-					w = GETITEM(names, EXTRACTARG(oparg));
-					err = PyObject_SetAttr(v, w, x); /* v.w = x */
+					err = PyObject_SetAttr(v,
+                                           GETITEM(names, EXTRACTARG(oparg)),
+                                           x); /* v.w = x */
 					Py_DECREF(x);
 					if (err == 0) continue;
 				}
 				break;
 			}
+            x = NULL;
 			PyRaise_UnboundLocalError(co, oparg);
 			break;
 #endif
 
 #ifdef WPY_LOAD_FAST_ATTR
 		case LOAD_FAST_ATTR:
-			v = GETLOCAL(oparg);
-			if (v != NULL) {
+			x = GETLOCAL(oparg);
+			if (x != NULL) {
 				NEXTARG16(oparg);
-				w = GETITEM(names, oparg);
-				x = PyObject_GetAttr(v, w);
+				x = PyObject_GetAttr(x, GETITEM(names, oparg));
 				if (x != NULL) {
 					PUSH(x);
 					continue;
@@ -2990,27 +3218,27 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 #endif
 
 		case STORE_FAST_ATTR:
+			x = GETLOCAL(oparg);
 			u = POP();
-			v = GETLOCAL(oparg);
-			if (v == NULL) {
-				PyRaise_UnboundLocalError(co, EXTRACTOP(oparg));
+			if (x == NULL) {
+				PyRaise_UnboundLocalError(co, oparg);
 				break;
 			}
 			NEXTARG16(oparg);
-			w = GETITEM(names, oparg);
-			err = PyObject_SetAttr(v, w, u); /* v.w = u */
+			err = PyObject_SetAttr(x, GETITEM(names, oparg), u); /* x.w = u */
 			Py_DECREF(u);
 			if (err == 0) continue;
 			break;
 
 #ifdef WPY_FAST_ADD_FAST_TO_FAST
 		case FAST_ADD_FAST_TO_FAST:
-			v = x = GETLOCAL(oparg);
-			if (x != NULL) {
+			v = GETLOCAL(oparg);
+			if (v != NULL) {
 				NEXTARG16(oparg);
-				w = x = GETLOCAL(EXTRACTOP(oparg));
+				x = GETLOCAL(EXTRACTOP(oparg));
 				if (x != NULL) {
-					x = quick_add(v, w, GETLOCAL(EXTRACTARG(oparg)));
+					x = quick_add(v, GETLOCAL(EXTRACTOP(oparg)),
+                                  GETLOCAL(EXTRACTARG(oparg)));
 					if (x != NULL) {
 						SETLOCAL(EXTRACTARG(oparg), x);
 						goto fast_next_opcode;
@@ -3019,39 +3247,39 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 				}
 				oparg = EXTRACTOP(oparg);
 			}
+            x = NULL;
 			PyRaise_UnboundLocalError(co, oparg);
 			break;
 #endif
 
 #ifdef WPY_FAST_INPLACE_ADD_FAST
 		case FAST_INPLACE_ADD_FAST:
-			v = x = GETLOCAL(oparg);
-			if (x != NULL) {
+			v = GETLOCAL(oparg);
+			if (v != NULL) {
 				err = oparg;
 				NEXTARG16(oparg);
-				w = x = GETLOCAL(oparg);
+				x = GETLOCAL(oparg);
 				if (x != NULL) {
-					x = quick_iadd(v, w);
+					x = quick_iadd(v, x);
 					if (x != NULL) {
 						SETLOCAL(err, x);
 						err = 0;
 						goto fast_next_opcode;
 					}
-					err = 0;
 					break;
 				}
-				err = 0;
 			}
+            x = NULL;
 			PyRaise_UnboundLocalError(co, oparg);
 			break;
 #endif
 
 #ifdef WPY_FAST_UNOP_TO_FAST
 		case FAST_UNOP_TO_FAST:
-			v = x = GETLOCAL(oparg);
+			x = GETLOCAL(oparg);
 			if (x != NULL) {
 				NEXTARG16(oparg);
-				x = UNARY_OPS_Table[EXTRACTOP(oparg)](v);
+				x = UNARY_OPS_Table[EXTRACTOP(oparg)](x);
 				if (x != NULL) {
 					SETLOCAL(EXTRACTARG(oparg), x);
 					goto fast_next_opcode;
@@ -3064,24 +3292,23 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 
 #ifdef WPY_FAST_INPLACE_BINOP_FAST
 		case FAST_INPLACE_BINOP_FAST:
-			v = x = GETLOCAL(oparg);
-			if (x != NULL) {
+			v = GETLOCAL(oparg);
+			if (v != NULL) {
 				err = oparg;
 				NEXTARG16(oparg);
-				w = x = GETLOCAL(EXTRACTOP(oparg));
+				x = GETLOCAL(EXTRACTOP(oparg));
 				if (x != NULL) {
-					x = BINARY_OPS_Table[EXTRACTARG(oparg)](v, w);
+					x = BINARY_OPS_Table[EXTRACTARG(oparg)](v, x);
 					if (x != NULL) {
 						SETLOCAL(err, x);
 						err = 0;
 						goto fast_next_opcode;
 					}
-					err = 0;
 					break;
 				}
 				oparg = EXTRACTOP(oparg);
-				err = 0;
 			}
+            x = NULL;
 			PyRaise_UnboundLocalError(co, oparg);
 			break;
 #endif
@@ -3100,12 +3327,12 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 		case FAST_AND_FAST_TO_FAST:
 		case FAST_XOR_FAST_TO_FAST:
 		case FAST_OR_FAST_TO_FAST:
-			v = x = GETLOCAL(oparg);
-			if (x != NULL) {
+			v = GETLOCAL(oparg);
+			if (v != NULL) {
 				NEXTARG16(oparg);
-				w = x = GETLOCAL(EXTRACTOP(oparg));
+				x = GETLOCAL(EXTRACTOP(oparg));
 				if (x != NULL) {
-					x = BINARY_OPS_Table[opcode - FAST_POW_FAST_TO_FAST](v, w);
+					x = BINARY_OPS_Table[opcode - FAST_POW_FAST_TO_FAST](v, x);
 					if (x != NULL) {
 						SETLOCAL(EXTRACTARG(oparg), x);
 						goto fast_next_opcode;
@@ -3114,6 +3341,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 				}
 				oparg = EXTRACTOP(oparg);
 			}
+            x = NULL;
 			PyRaise_UnboundLocalError(co, oparg);
 			break;
 #endif
@@ -3122,27 +3350,26 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 		case CONST_ADD_FAST_TO_FAST:
 			v = GETITEM(consts, oparg);
 			NEXTARG16(oparg);
-			w = x = GETLOCAL(EXTRACTOP(oparg));
+			x = GETLOCAL(EXTRACTOP(oparg));
 			if (x != NULL) {
-				x = quick_add(v, w, GETLOCAL(EXTRACTARG(oparg)));
+				x = quick_add(v, x, GETLOCAL(EXTRACTARG(oparg)));
 				if (x != NULL) {
 					SETLOCAL(EXTRACTARG(oparg), x);
 					goto fast_next_opcode;
 				}
 				break;
 			}
-			oparg = EXTRACTOP(oparg);
-			PyRaise_UnboundLocalError(co, oparg);
+			PyRaise_UnboundLocalError(co, EXTRACTOP(oparg));
 			break;
 #endif
 
 #ifdef WPY_FAST_ADD_CONST_TO_FAST
 		case FAST_ADD_CONST_TO_FAST:
-			v = x = GETLOCAL(oparg);
+			x = GETLOCAL(oparg);
 			if (x != NULL) {
 				NEXTARG16(oparg);
-				w = GETITEM(consts, EXTRACTOP(oparg));
-				x = quick_add(v, w, GETLOCAL(EXTRACTARG(oparg)));
+				x = quick_add(x, GETITEM(consts, EXTRACTOP(oparg)),
+                              GETLOCAL(EXTRACTARG(oparg)));
 				if (x != NULL) {
 					SETLOCAL(EXTRACTARG(oparg), x);
 					goto fast_next_opcode;
@@ -3155,18 +3382,16 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 
 #ifdef WPY_FAST_INPLACE_ADD_CONST
 		case FAST_INPLACE_ADD_CONST:
-			v = x = GETLOCAL(oparg);
+			x = GETLOCAL(oparg);
 			if (x != NULL) {
 				err = oparg;
 				NEXTARG16(oparg);
-				w = GETITEM(consts, oparg);
-				x = quick_iadd(v, w);
+				x = quick_iadd(x, GETITEM(consts, oparg));
 				if (x != NULL) {
 					SETLOCAL(err, x);
 					err = 0;
 					goto fast_next_opcode;
 				}
-				err = 0;
 				break;
 			}
 			PyRaise_UnboundLocalError(co, oparg);
@@ -3189,9 +3414,9 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 		case CONST_OR_FAST_TO_FAST:
 			v = GETITEM(consts, oparg);
 			NEXTARG16(oparg);
-			w = x = GETLOCAL(EXTRACTOP(oparg));
+			x = GETLOCAL(EXTRACTOP(oparg));
 			if (x != NULL) {
-				x = BINARY_OPS_Table[opcode - CONST_POW_FAST_TO_FAST](v, w);
+				x = BINARY_OPS_Table[opcode - CONST_POW_FAST_TO_FAST](v, x);
 				if (x != NULL) {
 					SETLOCAL(EXTRACTARG(oparg), x);
 					goto fast_next_opcode;
@@ -3216,11 +3441,11 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 		case FAST_AND_CONST_TO_FAST:
 		case FAST_XOR_CONST_TO_FAST:
 		case FAST_OR_CONST_TO_FAST:
-			v = x = GETLOCAL(oparg);
+			x = GETLOCAL(oparg);
 			if (x != NULL) {
 				NEXTARG16(oparg);
-				w = GETITEM(consts, EXTRACTOP(oparg));
-				x = BINARY_OPS_Table[opcode - FAST_POW_CONST_TO_FAST](v, w);
+				x = BINARY_OPS_Table[opcode - FAST_POW_CONST_TO_FAST](x,
+                        GETITEM(consts, EXTRACTOP(oparg)));
 				if (x != NULL) {
 					SETLOCAL(EXTRACTARG(oparg), x);
 					goto fast_next_opcode;
@@ -3233,12 +3458,12 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 
 #ifdef WPY_FAST_ADD_FAST
 		case FAST_ADD_FAST:
-			v = x = GETLOCAL(oparg);
-			if (x != NULL) {
+			v = GETLOCAL(oparg);
+			if (v != NULL) {
 				NEXTARG16(oparg);
-				w = x = GETLOCAL(oparg);
+				x = GETLOCAL(oparg);
 				if (x != NULL) {
-					x = quick_add(v, w, NULL);
+					x = quick_add(v, x, NULL);
 					if (x != NULL) {
 						PUSH(x);
 						continue;
@@ -3246,18 +3471,19 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 					break;
 				}
 			}
+            x = NULL;
 			PyRaise_UnboundLocalError(co, oparg);
 			break;
 #endif
 
 #ifdef WPY_FAST_BINOP_FAST
 		case FAST_BINOP_FAST:
-			v = x = GETLOCAL(oparg);
-			if (x != NULL) {
+			v = GETLOCAL(oparg);
+			if (v != NULL) {
 				NEXTARG16(oparg);
-				w = x = GETLOCAL(EXTRACTOP(oparg));
+				x = GETLOCAL(EXTRACTOP(oparg));
 				if (x != NULL) {
-					x = BINARY_OPS_Table[EXTRACTARG(oparg)](v, w);
+					x = BINARY_OPS_Table[EXTRACTARG(oparg)](v, x);
 					if (x != NULL) {
 						PUSH(x);
 						continue;
@@ -3266,6 +3492,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 				}
 				oparg = EXTRACTOP(oparg);
 			}
+            x = NULL;
 			PyRaise_UnboundLocalError(co, oparg);
 			break;
 #endif
@@ -3274,9 +3501,9 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 		case CONST_ADD_FAST:
 			v = GETITEM(consts, oparg);
 			NEXTARG16(oparg);
-			w = x = GETLOCAL(oparg);
+			x = GETLOCAL(oparg);
 			if (x != NULL) {
-				x = quick_add(v, w, NULL);
+				x = quick_add(v, x, NULL);
 				if (x != NULL) {
 					PUSH(x);
 					continue;
@@ -3291,9 +3518,9 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 		case CONST_BINOP_FAST:
 			v = GETITEM(consts, oparg);
 			NEXTARG16(oparg);
-			w = x = GETLOCAL(EXTRACTOP(oparg));
+			x = GETLOCAL(EXTRACTOP(oparg));
 			if (x != NULL) {
-				x = BINARY_OPS_Table[EXTRACTARG(oparg)](v, w);
+				x = BINARY_OPS_Table[EXTRACTARG(oparg)](v, x);
 				if (x != NULL) {
 					PUSH(x);
 					continue;
@@ -3307,11 +3534,10 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 
 #ifdef WPY_FAST_ADD_CONST
 		case FAST_ADD_CONST:
-			v = x = GETLOCAL(oparg);
+			x = GETLOCAL(oparg);
 			if (x != NULL) {
 				NEXTARG16(oparg);
-				w = GETITEM(consts, oparg);
-				x = quick_add(v, w, NULL);
+				x = quick_add(x, GETITEM(consts, oparg), NULL);
 				if (x != NULL) {
 					PUSH(x);
 					continue;
@@ -3324,11 +3550,11 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 
 #ifdef WPY_FAST_BINOP_CONST
 		case FAST_BINOP_CONST:
-			v = x = GETLOCAL(oparg);
+			x = GETLOCAL(oparg);
 			if (x != NULL) {
 				NEXTARG16(oparg);
-				w = GETITEM(consts, EXTRACTOP(oparg));
-				x = BINARY_OPS_Table[EXTRACTARG(oparg)](v, w);
+				x = BINARY_OPS_Table[EXTRACTARG(oparg)](x,
+                        GETITEM(consts, EXTRACTOP(oparg)));
 				if (x != NULL) {
 					PUSH(x);
 					continue;
@@ -3341,10 +3567,10 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 
 #ifdef WPY_FAST_ADD_TO_FAST
 		case FAST_ADD_TO_FAST:
+			x = GETLOCAL(oparg);
 			v = POP();
-			w = x = GETLOCAL(oparg);
 			if (x != NULL) {
-				x = quick_add(v, w, NULL);
+				x = quick_add(v, x, NULL);
 				if (x != NULL) {
 					NEXTARG16(oparg);
 					Py_DECREF(v);
@@ -3359,11 +3585,11 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 
 #ifdef WPY_FAST_BINOP_TO_FAST
 		case FAST_BINOP_TO_FAST:
+			x = GETLOCAL(oparg);
 			v = POP();
-			w = x = GETLOCAL(oparg);
 			if (x != NULL) {
 				NEXTARG16(oparg);
-				x = BINARY_OPS_Table[EXTRACTOP(oparg)](v, w);
+				x = BINARY_OPS_Table[EXTRACTOP(oparg)](v, x);
 				if (x != NULL) {
 					Py_DECREF(v);
 					SETLOCAL(EXTRACTARG(oparg), x);
@@ -3378,8 +3604,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 #ifdef WPY_CONST_ADD_TO_FAST
 		case CONST_ADD_TO_FAST:
 			v = POP();
-			w = GETITEM(consts, oparg);
-			x = quick_add(v, w, NULL);
+			x = quick_add(v, GETITEM(consts, oparg), NULL);
 			if (x != NULL) {
 				NEXTARG16(oparg);
 				Py_DECREF(v);
@@ -3408,8 +3633,8 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			v = POP();
 			x = UNARY_OPS_Table[oparg](v);
 			Py_DECREF(v);
+			NEXTARG16(oparg);
 			if (x != NULL) {
-				NEXTARG16(oparg);
 				SETLOCAL(oparg, x);
 				goto fast_next_opcode;
 			}
@@ -3424,8 +3649,8 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			x = BINARY_OPS_Table[oparg](v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
+			NEXTARG16(oparg);
 			if (x != NULL) {
-				NEXTARG16(oparg);
 				SETLOCAL(oparg, x);
 				goto fast_next_opcode;
 			}
@@ -3434,10 +3659,10 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 
 #ifdef WPY_FAST_UNOP
 		case FAST_UNOP:
-			v = x = GETLOCAL(oparg);
+			x = GETLOCAL(oparg);
 			if (x != NULL) {
 				NEXTARG16(oparg);
-				x = UNARY_OPS_Table[oparg](v);
+				x = UNARY_OPS_Table[oparg](x);
 				PUSH(x);
 				if (x != NULL) continue;
 				break;
@@ -3448,11 +3673,11 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 
 #ifdef WPY_FAST_BINOP
 		case FAST_BINOP:
+			x = GETLOCAL(oparg);
 			v = TOP();
-			w = x = GETLOCAL(oparg);
 			if (x != NULL) {
 				NEXTARG16(oparg);
-				x = BINARY_OPS_Table[oparg](v, w);
+				x = BINARY_OPS_Table[oparg](v, x);
 				Py_DECREF(v);
 				SET_TOP(x);
 				if (x != NULL) continue;
@@ -3477,10 +3702,9 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 #ifdef WPY_LOAD_GLOBAL_ATTR
 		case LOAD_GLOBAL_ATTR:
 			x = load_global(GETITEM(names, oparg), f);
+			NEXTARG16(oparg);
 			if (x != NULL) {
-				NEXTARG16(oparg);
-				w = GETITEM(names, oparg);
-				x = PyObject_GetAttr(x, w);
+				x = PyObject_GetAttr(x, GETITEM(names, oparg));
 				if (x != NULL) {
 					PUSH(x);
 					continue;
@@ -3504,12 +3728,12 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			x = call_function(&sp, na, nk);
 #endif
 			stack_pointer = sp;
+			NEXTARG16(oparg);
 			if (x != NULL) {
-				NEXTARG16(oparg);
 				Py_DECREF(x);
 				retval = GETITEM(consts, oparg);
-				Py_INCREF(retval);
 				why = WHY_RETURN;
+				Py_INCREF(retval);
 				goto fast_block_end;
 			}
 			break;
@@ -3520,17 +3744,17 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 	    case LOAD_GLOB_FAST_CALL_FUNC:
 		{
 			PCALL(PCALL_ALL);
-			v = x = load_global(GETITEM(names, oparg), f);
-			if (x != NULL) {
+			v = load_global(GETITEM(names, oparg), f);
+			if (v != NULL) {
 				NEXTARG16(oparg);
-				w = x = GETLOCAL(EXTRACTOP(oparg));
+				x = GETLOCAL(EXTRACTOP(oparg));
 				if (x != NULL) {
 					int na, nk;
 					PyObject **sp;
 					STACKADJ(2);
-					Py_INCREF(w);
+					Py_INCREF(x);
 					Py_INCREF(v);
-					SET_TOP(w);
+					SET_TOP(x);
 					SET_SECOND(v);
 					oparg = EXTRACTARG(oparg);
 					sp = stack_pointer;
@@ -3549,6 +3773,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 				}
 				PyRaise_UnboundLocalError(co, EXTRACTOP(oparg));
 			}
+            x = NULL;
 			break;
 		}
 #endif
@@ -3556,11 +3781,10 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 #ifdef WPY_FAST_ATTR_CALL_FUNC
 		case FAST_ATTR_CALL_FUNC:
 			PCALL(PCALL_ALL);
-			v = GETLOCAL(oparg);
-			if (v != NULL) {
+			x = GETLOCAL(oparg);
+			if (x != NULL) {
 				NEXTARG16(oparg);
-				w = GETITEM(names, oparg);
-				x = PyObject_GetAttr(v, w);
+				x = PyObject_GetAttr(x, GETITEM(names, oparg));
 				if (x != NULL) {
 					PyObject **sp;
 					PUSH(x);
@@ -3584,11 +3808,10 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 #ifdef WPY_FAST_ATTR_CALL_PROC
 		case FAST_ATTR_CALL_PROC:
 			PCALL(PCALL_ALL);
-			v = GETLOCAL(oparg);
-			if (v != NULL) {
+			x = GETLOCAL(oparg);
+			if (x != NULL) {
 				NEXTARG16(oparg);
-				w = GETITEM(names, oparg);
-				x = PyObject_GetAttr(v, w);
+				x = PyObject_GetAttr(x, GETITEM(names, oparg));
 				if (x != NULL) {
 					PyObject **sp;
 					PUSH(x);
@@ -3610,7 +3833,260 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			break;
 #endif
 
-		default:
+	    case CALL_SUB:
+		{
+		    int na, nk, n;
+		    PyObject **pfunc, *func, **sp;
+			err = oparg; /* Save CALL flags. */
+			NEXTARG16(oparg);
+			na = oparg & 0xff;
+			nk = oparg >> 8;
+		    /* CALL flags & 1 = CALL_FLAG_VAR.
+		      CALL flags >> 1 & 1 = CALL_FLAG_KW. */
+		    n = na + (nk << 1) + (err & 1) + (err >> 1 & 1);
+		    PCALL(PCALL_ALL);
+		    pfunc = stack_pointer - n - 1;
+		    func = *pfunc;
+
+		    if (PyMethod_Check(func)
+			&& PyMethod_GET_SELF(func) != NULL) {
+			    PyObject *self = PyMethod_GET_SELF(func);
+			    Py_INCREF(self);
+			    func = PyMethod_GET_FUNCTION(func);
+			    Py_INCREF(func);
+			    Py_DECREF(*pfunc);
+			    *pfunc = self;
+			    na++;
+			    n++;
+		    } else
+			    Py_INCREF(func);
+		    sp = stack_pointer;
+		    READ_TIMESTAMP(intr0);
+		    x = ext_do_call(func, &sp, err, na, nk);
+		    READ_TIMESTAMP(intr1);
+		    stack_pointer = sp;
+		    Py_DECREF(func);
+
+		    while (stack_pointer > pfunc) {
+			    w = POP();
+			    Py_DECREF(w);
+		    }
+            if (x != NULL) {
+			    /* Discards the result on CALL_PROCEDURE.
+			       To work correctly bit 2 of the CALL flags is retrieved;
+			       it's 0 for a CALL_FUNCTION and 4 for a CALL_PROCEDURE. */
+#ifdef WPY_CALL_PROCEDURE
+			    if (err & 4)
+				    Py_DECREF(x);
+			    else
+#endif
+			        PUSH(x); /* It's a CALL_FUNCTION: keep the result on TOP */
+			    err = 0;
+			    continue;
+            }
+		    break;
+		}
+
+		case FAST_INPLACE_BINOP_CONST:
+			w = GETITEM(consts, oparg);
+			NEXTARG16(oparg);
+			x = GETLOCAL(EXTRACTOP(oparg));
+			if (x != NULL) {
+				x = BINARY_OPS_Table[EXTRACTARG(oparg)](x, w);
+				if (x != NULL) {
+					SETLOCAL(EXTRACTOP(oparg), x);
+					goto fast_next_opcode;
+				}
+				break;
+			}
+			PyRaise_UnboundLocalError(co, oparg);
+			break;
+
+#ifdef WPY_SMALLINT_SUPER_INSTRUCTIONS
+		case INT_POW_FAST_TO_FAST:
+		case INT_MUL_FAST_TO_FAST:
+		case INT_DIV_FAST_TO_FAST:
+		case INT_T_DIV_FAST_TO_FAST:
+		case INT_F_DIV_FAST_TO_FAST:
+		case INT_MOD_FAST_TO_FAST:
+		case INT_SUB_FAST_TO_FAST:
+		case INT_SUBSCR_FAST_TO_FAST:
+		case INT_SHL_FAST_TO_FAST:
+		case INT_SHR_FAST_TO_FAST:
+		case INT_AND_FAST_TO_FAST:
+		case INT_XOR_FAST_TO_FAST:
+		case INT_OR_FAST_TO_FAST:
+		case INT_ADD_FAST_TO_FAST:
+			x = GETLOCAL(oparg);
+			if (x != NULL) {
+    			NEXTARG16(oparg);
+                if (PyInt_CheckExact(x))
+                    x = INT_BINARY_OPS_Table[opcode - INT_POW_FAST_TO_FAST](
+                            EXTRACTOP(oparg), PyInt_AS_LONG(x));
+                else
+                    x = BINARY_OPS_Table[opcode - INT_POW_FAST_TO_FAST](
+                            _Py_Int_FromByteNoRef(EXTRACTOP(oparg)), x);
+				if (x != NULL) {
+					SETLOCAL(EXTRACTARG(oparg), x);
+					goto fast_next_opcode;
+				}
+				break;
+			}
+			PyRaise_UnboundLocalError(co, oparg);
+			break;
+
+		case FAST_POW_INT_TO_FAST:
+		case FAST_MUL_INT_TO_FAST:
+		case FAST_DIV_INT_TO_FAST:
+		case FAST_T_DIV_INT_TO_FAST:
+		case FAST_F_DIV_INT_TO_FAST:
+		case FAST_MOD_INT_TO_FAST:
+		case FAST_SUB_INT_TO_FAST:
+		case FAST_SHL_INT_TO_FAST:
+		case FAST_SHR_INT_TO_FAST:
+		case FAST_AND_INT_TO_FAST:
+		case FAST_XOR_INT_TO_FAST:
+		case FAST_OR_INT_TO_FAST:
+		case FAST_ADD_INT_TO_FAST:
+			x = GETLOCAL(oparg);
+			if (x != NULL) {
+    			NEXTARG16(oparg);
+                if (PyInt_CheckExact(x))
+                    x = INT_BINARY_OPS_Table[opcode - FAST_POW_INT_TO_FAST](
+                            PyInt_AS_LONG(x), EXTRACTOP(oparg));
+                else
+                    x = BINARY_OPS_Table[opcode - FAST_POW_INT_TO_FAST](
+                            x, _Py_Int_FromByteNoRef(EXTRACTOP(oparg)));
+				if (x != NULL) {
+					SETLOCAL(EXTRACTARG(oparg), x);
+					goto fast_next_opcode;
+				}
+				break;
+			}
+			PyRaise_UnboundLocalError(co, oparg);
+			break;
+
+		case FAST_SUBSCR_INT_TO_FAST:
+			x = GETLOCAL(oparg);
+			if (x != NULL) {
+    			NEXTARG16(oparg);
+                if (PyList_CheckExact(x)) {
+            		/* INLINE: list[int] */
+		            register Py_ssize_t i = EXTRACTOP(oparg);
+		            if (i < PyList_GET_SIZE(x)) {
+			            x = PyList_GET_ITEM(x, i);
+			            Py_INCREF(x);
+                    }
+		            else
+                        x = PyObject_GetItem(x,
+                                _Py_Int_FromByteNoRef(EXTRACTOP(oparg)));
+                }
+                else
+                    x = PyObject_GetItem(x,
+                            _Py_Int_FromByteNoRef(EXTRACTOP(oparg)));
+				if (x != NULL) {
+					SETLOCAL(EXTRACTARG(oparg), x);
+					goto fast_next_opcode;
+				}
+				break;
+			}
+			PyRaise_UnboundLocalError(co, oparg);
+			break;
+
+		case FAST_INPLACE_BINOP_INT:
+			x = GETLOCAL(oparg);
+            err = oparg;
+			if (x != NULL) {
+       			NEXTARG16(oparg);
+                if (PyInt_CheckExact(x))
+                    x = INT_BINARY_OPS_Table[EXTRACTARG(oparg)](
+                            PyInt_AS_LONG(x), EXTRACTOP(oparg));
+                else
+                    x = BINARY_OPS_Table[EXTRACTARG(oparg)](
+                            x, _Py_Int_FromByteNoRef(EXTRACTOP(oparg)));
+				if (x != NULL) {
+					SETLOCAL(err, x);
+                    err = 0;
+					goto fast_next_opcode;
+				}
+				break;
+			}
+			PyRaise_UnboundLocalError(co, err);
+			break;
+
+		case INT_BINOP_FAST:
+			x = GETLOCAL(oparg);
+			if (x != NULL) {
+    			NEXTARG16(oparg);
+                if (PyInt_CheckExact(x))
+                    x = INT_BINARY_OPS_Table[EXTRACTARG(oparg)](
+                            EXTRACTOP(oparg), PyInt_AS_LONG(x));
+                else
+                    x = BINARY_OPS_Table[EXTRACTARG(oparg)](
+                            _Py_Int_FromByteNoRef(EXTRACTOP(oparg)), x);
+				if (x != NULL) {
+					PUSH(x);
+					continue;
+				}
+				break;
+			}
+			PyRaise_UnboundLocalError(co, oparg);
+			break;
+
+		case FAST_BINOP_INT:
+			x = GETLOCAL(oparg);
+			if (x != NULL) {
+    			NEXTARG16(oparg);
+                if (PyInt_CheckExact(x))
+                    x = INT_BINARY_OPS_Table[EXTRACTARG(oparg)](
+                            PyInt_AS_LONG(x), EXTRACTOP(oparg));
+                else
+                    x = BINARY_OPS_Table[EXTRACTARG(oparg)](
+                            x, _Py_Int_FromByteNoRef(EXTRACTOP(oparg)));
+				if (x != NULL) {
+					PUSH(x);
+					continue;
+				}
+				break;
+			}
+			PyRaise_UnboundLocalError(co, oparg);
+			break;
+
+		case INT_BINOP_TO_FAST:
+			v = POP();
+            err = oparg;
+   		    NEXTARG16(oparg);
+            if (PyInt_CheckExact(v))
+                x = INT_BINARY_OPS_Table[EXTRACTOP(oparg)](
+                        PyInt_AS_LONG(v), err);
+            else
+			    x = BINARY_OPS_Table[EXTRACTOP(oparg)](v,
+                        _Py_Int_FromByteNoRef(err));
+			Py_DECREF(v);
+			if (x != NULL) {
+                err = 0;
+				SETLOCAL(EXTRACTARG(oparg), x);
+				goto fast_next_opcode;
+			}
+			break;
+
+		case INT_BINOP:
+			v = TOP();
+   		    NEXTARG16(oparg);
+            if (PyInt_CheckExact(v))
+                x = INT_BINARY_OPS_Table[EXTRACTARG(oparg)](
+                        PyInt_AS_LONG(v), EXTRACTOP(oparg));
+            else
+			    x = BINARY_OPS_Table[EXTRACTARG(oparg)](
+                    v, _Py_Int_FromByteNoRef(EXTRACTOP(oparg)));
+			if (x != NULL) {
+				SET_TOP(x);
+				goto fast_next_opcode;
+			}
+			break;
+#endif
+
+        default:
 			fprintf(stderr,
 				"XXX lineno: %d, opcode: %d\n",
 				PyCode_Addr2Line(f->f_code, f->f_lasti),
@@ -5113,6 +5589,79 @@ fast_function(PyObject *func, PyObject ***pp_stack, int n, int na, int nk)
 				 PyFunction_GET_CLOSURE(func));
 }
 
+/* Same as fast_function, but only used for functions which are called with
+   the same number of arguments (e.g. co->co_argcount == n), and have no
+   keyword arguments.
+   args must point to the first argument (e.g. args = (*pp_stack) - n) if any.
+   May be extend to add support for free variables, avoiding the
+   PyEval_EvalCodeEx call for worst case.*/
+
+static PyObject *
+exact_args_fast_function(PyObject *func, PyObject **args, int n
+#ifdef WITH_TSC
+		, uint64* pintr0, uint64* pintr1
+#endif
+		)
+{
+	PyCodeObject *co = (PyCodeObject *)PyFunction_GET_CODE(func);
+	PyObject *globals = PyFunction_GET_GLOBALS(func);
+#ifdef WITH_TSC
+	PyObject *retval;
+#endif
+
+	READ_TIMESTAMP(*pintr0);
+	PCALL(PCALL_FUNCTION);
+	PCALL(PCALL_FAST_FUNCTION);
+	if (co->co_flags == (CO_OPTIMIZED | CO_NEWLOCALS | CO_NOFREE)) {
+		int i;
+		PyFrameObject *f;
+		PyThreadState *tstate = PyThreadState_GET();
+		PyObject **fastlocals;
+#ifdef WITH_TSC
+        retval = NULL;
+#else
+    	PyObject *retval = NULL;
+#endif
+
+        PCALL(PCALL_FASTER_FUNCTION);
+		assert(globals != NULL);
+		/* XXX Perhaps we should create a specialized
+		   PyFrame_New() that doesn't take locals, but does
+		   take builtins without sanity checking them.
+		*/
+		assert(tstate != NULL);
+		f = PyFrame_New(tstate, co, globals, NULL);
+		if (f == NULL)
+			return NULL;
+
+		fastlocals = f->f_localsplus;
+
+		for (i = 0; i < n; i++) {
+			Py_INCREF(*args);
+			fastlocals[i] = *args++;
+		}
+		retval = PyEval_EvalFrameEx(f,0);
+		++tstate->recursion_depth;
+		Py_DECREF(f);
+		--tstate->recursion_depth;
+		READ_TIMESTAMP(*pintr1);
+		return retval;
+	}
+#ifdef WITH_TSC
+    retval = PyEval_EvalCodeEx(co, globals,
+				 (PyObject *)NULL, args, n,
+				 (PyObject **)NULL, 0, (PyObject **)NULL, 0,
+				 PyFunction_GET_CLOSURE(func));
+	READ_TIMESTAMP(*pintr1);
+    return retval
+#else
+    return PyEval_EvalCodeEx(co, globals,
+				 (PyObject *)NULL, args, n,
+				 (PyObject **)NULL, 0, (PyObject **)NULL, 0,
+				 PyFunction_GET_CLOSURE(func));
+#endif
+}
+
 static PyObject *
 update_keyword_args(PyObject *orig_kwdict, int nk, PyObject ***pp_stack,
                     PyObject *func)
@@ -5494,9 +6043,18 @@ import_all_from(PyObject *locals, PyObject *v)
 }
 
 static PyObject *
-build_class(PyObject *name, PyObject *bases, PyObject *methods)
+build_class(PyObject *name, PyObject *bases, PyObject *func)
 {
-	PyObject *metaclass = NULL, *result, *base;
+	PyObject *metaclass = NULL, *result, *base, *methods;
+
+	PCALL(PCALL_ALL);
+#ifdef WITH_TSC
+    methods = exact_args_fast_function(func, &metaclass, 0, &intr0, &intr1);
+#else
+    methods = exact_args_fast_function(func, &metaclass, 0);
+#endif
+    if (methods == NULL)
+        return NULL;
 
 	if (PyDict_Check(methods))
 		metaclass = PyDict_GetItemString(methods, "__metaclass__");
@@ -5544,6 +6102,7 @@ build_class(PyObject *name, PyObject *bases, PyObject *methods)
 		}
 		PyErr_Restore(ptype, pvalue, ptraceback);
 	}
+	Py_DECREF(methods);
 	return result;
 }
 

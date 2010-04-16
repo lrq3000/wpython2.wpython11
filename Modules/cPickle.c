@@ -3955,7 +3955,7 @@ load_persid(Unpicklerobject *self)
 		if (!pid)  return -1;
 
 		if (PyList_Check(self->pers_func)) {
-			if (PyList_Append(self->pers_func, pid) < 0) {
+			if (_Py_list_append(self->pers_func, pid) < 0) {
 				Py_DECREF(pid);
 				return -1;
 			}
@@ -3992,7 +3992,7 @@ load_binpersid(Unpicklerobject *self)
 		if (! pid) return -1;
 
 		if (PyList_Check(self->pers_func)) {
-			if (PyList_Append(self->pers_func, pid) < 0) {
+			if (_Py_list_append(self->pers_func, pid) < 0) {
 				Py_DECREF(pid);
 				return -1;
 			}

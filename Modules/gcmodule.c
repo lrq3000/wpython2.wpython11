@@ -219,7 +219,7 @@ append_objects(PyObject *py_list, PyGC_Head *gc_list)
 	for (gc = gc_list->gc.gc_next; gc != gc_list; gc = gc->gc.gc_next) {
 		PyObject *op = FROM_GC(gc);
 		if (op != py_list) {
-			if (PyList_Append(py_list, op)) {
+			if (_Py_list_append(py_list, op)) {
 				return -1; /* exception */
 			}
 		}
@@ -682,7 +682,7 @@ handle_finalizers(PyGC_Head *finalizers, PyGC_Head *old)
 		PyObject *op = FROM_GC(gc);
 
 		if ((debug & DEBUG_SAVEALL) || has_finalizer(op)) {
-			if (PyList_Append(garbage, op) < 0)
+			if (_Py_list_append(garbage, op) < 0)
 				return -1;
 		}
 	}
@@ -706,7 +706,7 @@ delete_garbage(PyGC_Head *collectable, PyGC_Head *old)
 
 		assert(IS_TENTATIVELY_UNREACHABLE(op));
 		if (debug & DEBUG_SAVEALL) {
-			PyList_Append(garbage, op);
+			_Py_list_append(garbage, op);
 		}
 		else {
 			if ((clear = Py_TYPE(op)->tp_clear) != NULL) {
@@ -1110,7 +1110,7 @@ gc_referrers_for(PyObject *objs, PyGC_Head *list, PyObject *resultlist)
 		if (obj == objs || obj == resultlist)
 			continue;
 		if (traverse(obj, (visitproc)referrersvisit, objs)) {
-			if (PyList_Append(resultlist, obj) < 0)
+			if (_Py_list_append(resultlist, obj) < 0)
 				return 0; /* error */
 		}
 	}
@@ -1141,7 +1141,7 @@ gc_get_referrers(PyObject *self, PyObject *args)
 static int
 referentsvisit(PyObject *obj, PyObject *list)
 {
-	return PyList_Append(list, obj) < 0;
+	return _Py_list_append(list, obj) < 0;
 }
 
 PyDoc_STRVAR(gc_get_referents__doc__,

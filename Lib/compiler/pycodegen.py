@@ -386,7 +386,7 @@ class CodeGenerator:
             self.visit(default)
         self._makeClosure(gen, len(node.defaults))
         for i in range(ndecorators):
-            self.emit('S_CALL_FUNCTION', 1)
+            self.emit('QUICK_CALL_FUNCTION', 1)
 
     def visitClass(self, node):
         gen = self.ClassGen(node, self.scopes,
@@ -399,7 +399,6 @@ class CodeGenerator:
             self.visit(base)
         self.emit('BUILD_TUPLE', len(node.bases))
         self._makeClosure(gen, 0)
-        self.emit('S_CALL_FUNCTION', 0)
         self.emit('BUILD_CLASS')
         self.storeName(node.name)
 
@@ -638,7 +637,7 @@ class CodeGenerator:
         # precomputation of outmost iterable
         self.visit(node.code.quals[0].iter)
         self.emit('GET_ITER')
-        self.emit('S_CALL_FUNCTION', 1)
+        self.emit('QUICK_CALL_FUNCTION', 1)
 
     def visitGenExprInner(self, node):
         self.set_lineno(node)
@@ -810,7 +809,7 @@ class CodeGenerator:
         self.emit('LOAD_ATTR', '__exit__')
         self.emit('ROT_TWO')
         self.emit('LOAD_ATTR', '__enter__')
-        self.emit('S_CALL_FUNCTION', 0)
+        self.emit('QUICK_CALL_FUNCTION', 0)
         if node.vars is None:
             self.emit('POP_TOP')
         else:
@@ -829,7 +828,6 @@ class CodeGenerator:
         self.nextBlock(final)
         self.setups.push((END_FINALLY, final))
         self.emit('WITH_CLEANUP')
-        self.emit('END_FINALLY')
         self.setups.pop()
         self.__with_count -= 1
 
@@ -1045,16 +1043,16 @@ class CodeGenerator:
                 kw = kw + 1
             else:
                 pos = pos + 1
-        if node.star_args is not None:
-            self.visit(node.star_args)
-        if node.dstar_args is not None:
-            self.visit(node.dstar_args)
         have_star = node.star_args is not None
+        if have_star:
+            self.visit(node.star_args)
         have_dstar = node.dstar_args is not None
-        opcode = callfunc_opcode_info[have_star, have_dstar]
-        if pos <= 15 and kw <= 15:
-            self.emit('S_' + opcode, kw << 4 | pos)
+        if have_dstar:
+            self.visit(node.dstar_args)
+        if not have_star and not have_dstar and pos <= 15 and kw <= 15:
+            self.emit('QUICK_CALL_FUNCTION', kw << 4 | pos)
         else:
+            opcode = callfunc_opcode_info[have_star, have_dstar]
             self.emit(opcode, kw << 8 | pos)
 
     def visitPrint(self, node, newline=0):
@@ -1411,8 +1409,7 @@ class AbstractClassCode:
 
     def finish(self):
         self.graph.startExitBlock()
-        self.emit('LOAD_LOCALS')
-        self.emit('RETURN_VALUE')
+        self.emit('RETURN_LOCALS')
 
 class ClassCodeGenerator(NestedScopeMixin, AbstractClassCode, CodeGenerator):
     super_init = CodeGenerator.__init__

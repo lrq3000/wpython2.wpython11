@@ -8,8 +8,26 @@ from compiler import misc
 from compiler.consts \
      import CO_OPTIMIZED, CO_NEWLOCALS, CO_VARARGS, CO_VARKEYWORDS
 
+_opnum = {}
+for opname, opcode in dis.opmap.iteritems():
+		if isinstance(opcode, tuple):
+				opcode, oparg = opcode
+				_opnum[opname] = oparg << 8 | opcode
+		else:
+				_opnum[opname] = opcode
+del opname, opcode, oparg
+
 def inst_len(inst):
-    return 1 if len(inst) == 1 or inst[0].startswith('S_') else 2
+    opcode = _opnum[inst[0]] & 255
+    if opcode < dis.HAVE_ARGUMENT:
+        return 1
+    if opcode < dis.EXTENDED_ARG16:
+#        arg = inst[1]
+#        if arg <= 255:
+#            return 1
+#        return 2 if arg <= 65535 else 3
+        return 2
+    return 2 if opcode < dis.EXTENDED_ARG32 else 3
 
 class FlowGraph:
     def __init__(self):
@@ -454,11 +472,18 @@ class PyFlowGraph(FlowGraph):
         self.stage = FLAT
 
     hasjrel = misc.Set()
-    for i in dis.hasjrel:
-        hasjrel.add(dis.opname[i])
+    addjrel = hasjrel.add
     hasjabs = misc.Set()
-    for i in dis.hasjabs:
-        hasjabs.add(dis.opname[i])
+    addjabs = hasjabs.add
+    arg_jrel = dis.arg_jrel
+    arg_jabs = dis.arg_jabs
+    for op, opargs in dis.opargs.iteritems():
+        for info in opargs:
+            if info == arg_jrel:
+                addjrel(dis.opname[op])
+            elif info == arg_jabs:
+                addjabs(dis.opname[op])
+    del addjrel, addjabs, arg_jrel, arg_jabs, op, opargs, info
 
     def convertArgs(self):
         """Convert arguments from symbolic to concrete form"""
@@ -560,33 +585,33 @@ class PyFlowGraph(FlowGraph):
         self.lnotab = lnotab = LineAddrTable()
         for t in self.insts:
             opname = t[0]
+            opcode = _opnum.get(opname, None)
             if len(t) == 1:
-                lnotab.addCode(self.opnum[opname])
-            elif opname.startswith('S_'):
-                # Special case for S_CALL: opcode is in high 8 bits
-                lnotab.addCode(t[1] << 8 | self.opnum[opname[2 : ]] >> 8)
+                lnotab.addCode(opcode)
             else:
                 oparg = t[1]
                 if opname == "SET_LINENO":
                     lnotab.nextLine(oparg)
                     continue
-                hi, lo = twobyte(oparg)
                 try:
-                    lnotab.addCode(self.opnum[opname], lo, hi)
+                    if dis.HAVE_ARGUMENT <= opcode < dis.EXTENDED_ARG16:
+#                        if oparg <= 255:
+#                            lnotab.addCode(oparg << 8 | opcode)
+#                        elif oparg <= 65535:
+#                            opcode = opcode << 8 | dis.EXTENDED_ARG16
+#                            lnotab.addCode(opcode, oparg)
+#                        else:
+#                            opcode = opcode << 8 | dis.EXTENDED_ARG32
+#                            lnotab.addCode(opcode, oparg & 65535, oparg >> 16)
+                        opcode = opcode << 8 | dis.EXTENDED_ARG16
+                        lnotab.addCode(opcode, oparg)
+                    else:
+                        lnotab.addCode(opcode, oparg)
                 except ValueError:
                     print opname, oparg
-                    print self.opnum[opname], lo, hi
+                    print opcode, oparg
                     raise
         self.stage = DONE
-
-    opnum = {}
-    for opname, opcode in dis.opmap.iteritems():
-        if isinstance(opcode, tuple):
-            opcode, oparg = opcode
-            opnum[opname] = oparg << 8 | opcode
-        else:
-            opnum[opname] = opcode << 8 | dis.EXTENDED_ARG16
-    del opname, opcode, oparg
 
     def newCodeObject(self):
         assert self.stage == DONE
@@ -672,8 +697,10 @@ class LineAddrTable:
         self.code.append(chr(lo))
         self.code.append(chr(hi))
         for arg in args:
-            self.code.append(chr(arg))
-        self.codeOffset += 2 if args else 1
+            hi, lo = twobyte(arg)
+            self.code.append(chr(lo))
+            self.code.append(chr(hi))
+        self.codeOffset += len(args) + 1
 
     def nextLine(self, lineno):
         if self.firstline == 0:
@@ -786,7 +813,7 @@ class StackDepthTracker:
         'EXEC_STMT': -3,
         'IMPORT_STAR': -1,
         'END_FINALLY': -1,
-        'WITH_CLEANUP': -1,
+        'WITH_CLEANUP': -2, # -1 + -1 for implicit END_FINALLY
         'RAISE_1': -1,
         'RAISE_2': -2,
         'RAISE_3': -3,
@@ -823,6 +850,14 @@ class StackDepthTracker:
         return -count+1
     def BUILD_LIST(self, count):
         return -count+1
+    def QUICK_CALL_FUNCTION(self, argc):
+        hi, lo = divmod(argc, 16)
+        return -(lo + hi * 2)
+    def MAKE_FUNCTION(self, argc):
+        return -argc
+    def MAKE_CLOSURE(self, argc):
+        # XXX need to account for free variables too!
+        return -argc
     def CALL_FUNCTION(self, argc):
         hi, lo = divmod(argc, 256)
         return -(lo + hi * 2)
@@ -832,19 +867,5 @@ class StackDepthTracker:
         return self.CALL_FUNCTION(argc)-1
     def CALL_FUNCTION_VAR_KW(self, argc):
         return self.CALL_FUNCTION(argc)-2
-    def S_CALL_FUNCTION(self, argc):
-        hi, lo = divmod(argc, 16)
-        return -(lo + hi * 2)
-    def S_CALL_FUNCTION_VAR(self, argc):
-        return self.S_CALL_FUNCTION(argc)-1
-    def S_CALL_FUNCTION_KW(self, argc):
-        return self.S_CALL_FUNCTION(argc)-1
-    def S_CALL_FUNCTION_VAR_KW(self, argc):
-        return self.S_CALL_FUNCTION(argc)-2
-    def MAKE_FUNCTION(self, argc):
-        return -argc
-    def MAKE_CLOSURE(self, argc):
-        # XXX need to account for free variables too!
-        return -argc
 
 findDepth = StackDepthTracker().findDepth

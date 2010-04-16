@@ -1,17 +1,14 @@
 from __future__ import with_statement
-import sys, types, os, traceback
+import sys
+import types
+import os
+import traceback
 from opcode import *
-from dis import get_extended_opcode
-
-MOVE_FAST_FAST = opmap['MOVE_FAST_FAST']
-MOVE_CONST_FAST = opmap['MOVE_CONST_FAST']
-MOVE_GLOBAL_FAST = opmap['MOVE_GLOBAL_FAST']
-MOVE_FAST_ATTR_FAST = opmap['MOVE_FAST_ATTR_FAST']
-MOVE_FAST_FAST_ATTR = opmap['MOVE_FAST_FAST_ATTR']
-MOVE_CONST_FAST_ATTR = opmap['MOVE_CONST_FAST_ATTR']
-LOAD_FAST_ATTR = opmap['LOAD_FAST_ATTR']
+from dis import get_opcode_info, findlabels, findlinestarts
 
 opt_print = False
+
+CALL_SUB = opmap['CALL_SUB']
 
 op_args = {}
 op_maxarg = {}
@@ -20,11 +17,17 @@ for op in xrange(256):
   op_maxarg[op] = 0
   for i in xrange(6):
     op_args[i, op] = [0, 0, 0, 0]
+  op_args[CALL_SUB, op] = [0, 0, 0, 0]
 singles = {}
 pairs = {}
 triples = {}
-
-
+max_code_len = 0
+max_code_lens_info = []
+code_len_stats = {}
+max_stack_usage = 0
+max_stack_usage_info = []
+max_const = max_local = max_free = max_name = max_jrel = max_jabs = 0
+int_stats = {}
 codeobject_types = frozenset((types.MethodType,
                     types.FunctionType,
                     types.CodeType,
@@ -88,50 +91,112 @@ def dis(x):
 
 def disassemble(co, lasti=-1):
     """Disassemble a code object."""
-    common_disassemble(co.co_code, lasti, True, dict(findlinestarts(co)),
+    common_disassemble(co, co.co_code, lasti, True, dict(findlinestarts(co)),
                        co.co_varnames, co.co_names, co.co_consts,
                        co.co_cellvars + co.co_freevars)
 
 def disassemble_string(code, lasti=-1, varnames=None, names=None,
                        constants=None):
-    common_disassemble(code, lasti, True, {}, varnames, names, constants, None)
+    common_disassemble(None, code, lasti, True, {}, varnames, names, constants, None)
 
 
-def common_disassemble(code, lasti, deep, linestarts,
+def common_disassemble(co, code, lasti, deep, linestarts,
                        varnames, names, constants, frees):
     """Disassemble a code object."""
 
-    def get_const(index):
+    global next_to_last_op, last_op, max_code_len, max_stack_usage
+
+    def eval_arg_not_used(arg):
+        return ''
+
+    def eval_arg_int(arg):
+        return str(arg)
+
+    def eval_arg_const(arg):
+        global max_const
+        if arg > max_const:
+            max_const = arg
         if constants:
-            const = constants[index]
+            const = constants[arg]
             if deep and type(const) in codeobject_types:
               code_objects.append(const)
-            return repr(const)
+            if isinstance(const, int):
+                if 0 <= const <= 255:
+                    int_stats[const] = int_stats.get(const, 0) + 1
+            return '%d (%r)' % (arg, const)
         else:
-            return '(%d)' % index
+            return '(%d)' % arg
 
-    def get_name(index):
-        if names is not None:
-            return names[index]
-        else:
-            return '(%d)' % index
-
-    def get_varname(index):
+    def eval_arg_local(arg):
+        global max_local
+        if arg > max_local:
+            max_local = arg
         if varnames is not None:
-            return varnames[index]
+            local = varnames[arg]
+            return '%d (%s)' % (arg, local)
         else:
-            return '(%d)' % index
+            return '(%d)' % arg
 
-    def get_free(index):
+    def eval_arg_free(arg):
+        global max_free
+        if arg > max_free:
+            max_free = arg
         if frees is not None:
-            return frees[index]
+            free = frees[arg]
+            return '%d (%s)' % (arg, free)
         else:
-            return '(%d)' % index
+            return '(%d)' % arg
 
-    global penultimate_op, last_op
-    penultimate_op = last_op = 0
-    labels = findlabels(code)
+    def eval_arg_name(arg):
+        global max_name
+        if arg > max_name:
+            max_name = arg
+        if names is not None:
+            name = names[arg]
+            return '%d (%s)' % (arg, name)
+        else:
+            return '(%d)' % arg
+
+    def eval_arg_quick_func(arg):
+        return '%d (%d %d)' % (arg, arg & 15, arg >> 4)
+
+    def eval_arg_jrel(arg):
+        global max_jrel
+        if arg > max_jrel:
+            max_jrel = arg
+        return '%d (to %d)' % (arg, offset + arg)
+
+    def eval_arg_jabs(arg):
+        global max_jabs
+        if arg > max_jabs:
+            max_jabs = arg
+        return repr(arg)
+
+    def eval_arg_unary(arg):
+        return '%d (%s)' % (arg, unary_op[arg])
+
+    def eval_arg_binary(arg):
+        return '%d (%s)' % (arg, binary_op[arg])
+
+    def eval_arg_ternary(arg):
+        return '%d (%s)' % (arg, ternary_op[arg])
+
+    evaluators = (eval_arg_not_used, eval_arg_int, eval_arg_const,
+        eval_arg_local, eval_arg_free, eval_arg_name,
+        eval_arg_quick_func, eval_arg_jrel, eval_arg_jabs,
+        eval_arg_unary, eval_arg_binary, eval_arg_ternary)
+
     n = len(code)
+    if n > max_code_len:
+      max_code_len = n
+      if co:
+        max_code_lens_info.append((n, co.co_name, co.co_filename, co.co_firstlineno))
+    code_len_stats[n >> 7] = code_len_stats.get(n >> 7, 0) + 1
+    if co and max_stack_usage < co.co_stacksize:
+      max_stack_usage = co.co_stacksize
+      max_stack_usage_info.append((max_stack_usage, co.co_name, co.co_filename, co.co_firstlineno))
+    next_to_last_op = last_op = 0
+    labels = findlabels(code)
     i = offset = 0
     code_objects = []
     while i < n:
@@ -151,60 +216,23 @@ def common_disassemble(code, lasti, deep, linestarts,
         else: pc('  ',)
         pc(repr(offset).rjust(4),)
         offset += 1
-        if op >= HAVE_ARGUMENT:
-            op, oparg, size = get_extended_opcode(code, i, op, oparg)
-            i += size + size
-            offset += size
-            pc('len', size,)
-            pc(opname[op].ljust(25),)
-            if EXTENDED_ARG16 < op < EXTENDED_ARG32:
-                pc(''.rjust(5),)
-                if op == MOVE_FAST_FAST:
-                    p(get_varname(oparg[0]) + ' -> ' + \
-                        get_varname(oparg[1]))
-                elif op == MOVE_CONST_FAST:
-                    p(get_const(oparg[0]) + ' -> ' + \
-                            get_varname(oparg[1]))
-                elif op == MOVE_GLOBAL_FAST:
-                    p(get_name(oparg[0]) + ' -> ' + \
-                        get_varname(oparg[1]))
-                elif op == MOVE_FAST_ATTR_FAST:
-                    p(get_varname(oparg[0]) + '.' + get_name(oparg[1]) + \
-                        ' -> ' + get_varname(oparg[2]))
-                elif op == MOVE_FAST_FAST_ATTR:
-                    p(get_varname(oparg[0]) + ' -> ' + \
-                          get_varname(oparg[1]) + '.' + get_name(oparg[2]))
-                elif op == MOVE_CONST_FAST_ATTR:
-                    p(get_const(oparg[0]) + ' -> ' + \
-                          get_varname(oparg[1]) + '.' + get_name(oparg[2]))
-                elif op == LOAD_FAST_ATTR:
-                    p(get_varname(oparg[0]) + '.' + get_name(oparg[1]))
-            else:
-              pc(repr(oparg).rjust(5),)
-              if op in hasconst:
-                  pc('(' + get_const(oparg) + ')',)
-              elif op in hasname:
-                  pc('(' + get_name(oparg) + ')',)
-              elif op in hasjrel:
-                  pc('(to ' + repr(offset + oparg) + ')',)
-              elif op in haslocal:
-                  pc('(' + get_varname(oparg) + ')',)
-              elif op in hascompare:
-                  pc('(' + cmp_op[oparg] + ')',)
-              elif op in hasfree:
-                  pc('(' + get_free(oparg) + ')',)
-            size += 1
-        else:
-            size = 0
-            pc('len', 1,)
-            pc(opname[op, oparg].ljust(30),)
-            if (op, oparg) in hascompare:
-                pc(' (' + cmp_op[oparg - hascompare[0][1]] + ')',)
-        p()
-        update_stats(op, oparg, size)
+        op, args, size = get_opcode_info(code, i, op, oparg)
+        i += size + size
+        offset += size
+        key = op, args[0]
+        name = opname.get(key, None)
+        if name is None:
+            key = op
+            name = opname[key]
+        str_args_list = []
+        append = str_args_list.append
+        for arg, info in zip(args, opargs[key]):
+            if info != arg_not_used:
+                append(evaluators[info](arg))
+        p(name.ljust(30), ' '.join(str_args_list))
+        update_stats(op, args[0], size + (op >= HAVE_ARGUMENT))
 
     check_code_objects(code_objects)
-
 
 
 def check_code_objects(code_objects):
@@ -215,65 +243,14 @@ def check_code_objects(code_objects):
           dis(code_object)
 
 
-def findlabels(code):
-    """Detect all offsets in a byte code which are jump targets.
-
-    Return the list of offsets.
-
-    """
-    labels = []
-    n = len(code)
-    i = offset = 0
-    while i < n:
-        op = ord(code[i])
-        oparg = ord(code[i + 1])
-        i += 2
-        offset += 1
-        if op >= HAVE_ARGUMENT:
-            op, oparg, size = get_extended_opcode(code, i, op, oparg)
-            i += size + size
-            offset += size
-            label = -1
-            if op in hasjrel:
-                label = offset + oparg
-            elif op in hasjabs:
-                label = oparg
-            if label >= 0:
-                if label not in labels:
-                    labels.append(label)
-    return labels
-
-
-def findlinestarts(code):
-    """Find the offsets in a word code which are start of lines in the source.
-
-    Generate pairs (offset, lineno) as described in Python/compile.c.
-
-    """
-    byte_increments = [ord(c) for c in code.co_lnotab[0::2]]
-    line_increments = [ord(c) for c in code.co_lnotab[1::2]]
-
-    lastlineno = None
-    lineno = code.co_firstlineno
-    addr = 0
-    for byte_incr, line_incr in zip(byte_increments, line_increments):
-        if byte_incr:
-            if lineno != lastlineno:
-                yield (addr, lineno)
-                lastlineno = lineno
-            addr += byte_incr
-        lineno += line_incr
-    if lineno != lastlineno:
-        yield (addr, lineno)
-
 def update_stats(op, oparg, offset):
-    global penultimate_op, last_op
+    global next_to_last_op, last_op
     #pc('update_stats:', str(op).rjust(3), opname[op].ljust(25), str(oparg).rjust(8), offset)
 
-    if op >= HAVE_ARGUMENT:
-      op_maxarg[op] = max(op_maxarg[op], oparg)
-    else:
+    if op < HAVE_ARGUMENT or op == CALL_SUB:
       op = op, oparg
+    else:
+      op_maxarg[op] = max(op_maxarg[op], oparg)
 
     op_args[op][offset] += 1
     #p('arg offset:', offset, op_args[op])
@@ -281,10 +258,10 @@ def update_stats(op, oparg, offset):
     if last_op:
         code = last_op, op
         pairs[code] = pairs.get(code, 0) + 1
-        if penultimate_op:
-            code = penultimate_op, last_op, op
+        if next_to_last_op:
+            code = next_to_last_op, last_op, op
             triples[code] = triples.get(code, 0) + 1
-    penultimate_op = last_op
+    next_to_last_op = last_op
     last_op = op
 
 
@@ -295,7 +272,10 @@ def display_stats():
         total = sum(op_arg)
         if total:
             if isinstance(op, tuple):
-                wordcode = str(op[0]) + ',' + str(op[1]).rjust(3)
+                if op[0] == CALL_SUB:
+                    wordcode = str(CALL_SUB) + ', ' + str(op[1])
+                else:
+                    wordcode = str(op[0]) + ',' + str(op[1]).rjust(3)
             else:
                 wordcode = str(op)
             pc(wordcode.rjust(6), opname[op].ljust(25),)
@@ -312,6 +292,8 @@ def display_stats():
     op_by_args = [0, 0, 0, 0, 0]
     for op in xrange(256):
       display_opcode_stats(op)
+    for oparg in xrange(256):
+      display_opcode_stats((CALL_SUB, oparg))
     for op in xrange(6):
       for oparg in xrange(256):
         display_opcode_stats((op, oparg))
@@ -326,6 +308,30 @@ def display_stats():
     for (description, count) in zip(('2 bytes:', '2 bytes:', '4 bytes:', '6 bytes:', 'total:  '), op_by_lens):
         pc(description, str(count).rjust(8),)
     p()
+
+    p('Max code len:', (max_code_len + 1) >> 1, 'words,', max_code_len, 'bytes.')
+    for n, name, filename, lineno in max_code_lens_info:
+        print '  Code length', n, 'FOR', name, 'IN', filename, 'AT', lineno, 'line.'
+
+    p(' Words  Bytes    Count')
+    for code_len in sorted(code_len_stats):
+        p(str(code_len << 6).rjust(6), str(code_len << 7).rjust(6), str(code_len_stats[code_len]).rjust(8))
+
+    p('Max StackUsage:', max_stack_usage)
+    for n, name, filename, lineno in max_stack_usage_info:
+        print '  Stack usage', n, 'FOR', name, 'IN', filename, 'AT', lineno, 'line.'
+
+    p('max_const:', max_const, 'max_local:', max_local, 'max_free:', max_free, 'max_name:', max_name, 'max_jrel:', max_jrel, 'max_jabs:', max_jabs)
+
+    p('small ints stats:')
+    n = 0
+    for i in sorted(int_stats):
+        pc(str(i).rjust(4) + ':', str(int_stats[i]).rjust(8), ' ')
+        n += 1
+        if not(n & 7):
+          p()
+    if n & 7:
+        p()
 
     p('Most frequent opcodes with argument (displaying the maximum argument):')
     stats = sorted(((count, code) for code, count in singles.iteritems() if not isinstance(code, tuple)), reverse = True)
@@ -349,8 +355,8 @@ def display_stats():
     p('Most frequent triples:')
     stats = sorted(((count, code) for code, count in triples.iteritems()), reverse = True)
     for count, code in stats[ : 20]:
-        penultimate_op, last_op, op = code 
-        p(' ', opname[penultimate_op].ljust(25), opname[last_op].ljust(25), opname[op].ljust(25), str(count).rjust(8))
+        next_to_last_op, last_op, op = code
+        p(' ', opname[next_to_last_op].ljust(25), opname[last_op].ljust(25), opname[op].ljust(25), str(count).rjust(8))
     p()
 
 

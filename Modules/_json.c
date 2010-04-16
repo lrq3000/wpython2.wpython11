@@ -270,7 +270,7 @@ scanstring_str(PyObject *pystr, Py_ssize_t end, char *encoding, int strict)
             if (chunk == NULL) {
                 goto bail;
             }
-            if (PyList_Append(chunks, chunk)) {
+            if (_Py_list_append(chunks, chunk)) {
                 Py_DECREF(chunk);
                 goto bail;
             }
@@ -372,7 +372,7 @@ scanstring_str(PyObject *pystr, Py_ssize_t end, char *encoding, int strict)
         if (chunk == NULL) {
             goto bail;
         }
-        if (PyList_Append(chunks, chunk)) {
+        if (_Py_list_append(chunks, chunk)) {
             Py_DECREF(chunk);
             goto bail;
         }
@@ -431,7 +431,7 @@ scanstring_unicode(PyObject *pystr, Py_ssize_t end, int strict)
             if (chunk == NULL) {
                 goto bail;
             }
-            if (PyList_Append(chunks, chunk)) {
+            if (_Py_list_append(chunks, chunk)) {
                 Py_DECREF(chunk);
                 goto bail;
             }
@@ -533,7 +533,7 @@ scanstring_unicode(PyObject *pystr, Py_ssize_t end, int strict)
         if (chunk == NULL) {
             goto bail;
         }
-        if (PyList_Append(chunks, chunk)) {
+        if (_Py_list_append(chunks, chunk)) {
             Py_DECREF(chunk);
             goto bail;
         }

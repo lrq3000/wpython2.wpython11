@@ -2147,7 +2147,7 @@ posix_listdir(PyObject *self, PyObject *args)
 						d = NULL;
 						break;
 					}
-					if (PyList_Append(d, v) != 0) {
+					if (_Py_list_append(d, v) != 0) {
 						Py_DECREF(v);
 						Py_DECREF(d);
 						d = NULL;
@@ -2215,7 +2215,7 @@ posix_listdir(PyObject *self, PyObject *args)
 				d = NULL;
 				break;
 			}
-			if (PyList_Append(d, v) != 0) {
+			if (_Py_list_append(d, v) != 0) {
 				Py_DECREF(v);
 				Py_DECREF(d);
 				d = NULL;
@@ -2303,7 +2303,7 @@ posix_listdir(PyObject *self, PyObject *args)
                 d = NULL;
                 break;
             }
-            if (PyList_Append(d, v) != 0) {
+            if (_Py_list_append(d, v) != 0) {
                 Py_DECREF(v);
                 Py_DECREF(d);
                 d = NULL;
@@ -2379,7 +2379,7 @@ posix_listdir(PyObject *self, PyObject *args)
 			}
 		}
 #endif
-		if (PyList_Append(d, v) != 0) {
+		if (_Py_list_append(d, v) != 0) {
 			Py_DECREF(v);
 			Py_DECREF(d);
 			d = NULL;

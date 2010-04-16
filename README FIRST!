@@ -1,4 +1,4 @@
-﻿This is WPython (codename "CISCy") v1.0, which is based on
+This is WPython (codename "CISCy") v1.1, which is based on
 Python 2.6.4.
 
 WPython is a re-implementation of (some parts of) Python, which drops
@@ -9,12 +9,13 @@ It also implements an hybrid stack-register virtual machine, and adds a of
 other optimizations.
 
 For better informations, take a look at the slides which I have presented to
-the last PyCon3 at Florence, in Italy. They explain the new architecture
+the last PyCon3 at Florence, in Italy, for WPython 1.0 (alpha). They explain the new architecture
 and give some informations about the optimizations.
+In the next PyCon(4) at Florence, in Italy, I'll explain the changes on WPython 1.1. 
 
 ============================
 
-Copyright (c) 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009
+Copyright (c) 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010
 Python Software Foundation.
 All rights reserved.
 
@@ -46,6 +47,17 @@ holders.
 
 What's new in this release?
 ---------------------------
+
+1.1
+
+Added a lot of more optimizations ranging in several areas.
+
+Introduced also a brand new superinstructions family to handle smallints
+(8 bits integer ranging from 0 to 255).
+
+
+What's in old releases?
+-----------------------
 
 1.0 
 

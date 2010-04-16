@@ -22,7 +22,7 @@ STORE_NAME = dis.opmap['STORE_NAME']
 STORE_GLOBAL = dis.opmap['STORE_GLOBAL']
 STORE_OPS = frozenset((STORE_NAME, STORE_GLOBAL))
 HAVE_ARGUMENT = dis.HAVE_ARGUMENT
-get_extended_opcode = dis.get_extended_opcode
+get_opcode_info = dis.get_opcode_info
 
 # Modulefinder does a good job at simulating Python's, but it can not
 # handle __path__ modifications packages make at runtime.  Therefore there
@@ -353,7 +353,8 @@ class ModuleFinder:
             oparg = ord(code[i + 1])
             i += 2
             if op >= HAVE_ARGUMENT:
-                op, oparg, size = get_extended_opcode(code, i, op, oparg)
+                op, opargs, size = get_opcode_info(code, i, op, oparg)
+                oparg = opargs[0]
                 i += size + size
                 if op in STORE_OPS:
                     yield "store", names[oparg]

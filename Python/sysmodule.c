@@ -947,7 +947,7 @@ list_builtin_module_names(void)
 			PyImport_Inittab[i].name);
 		if (name == NULL)
 			break;
-		PyList_Append(list, name);
+		_Py_list_append(list, name);
 		Py_DECREF(name);
 	}
 	if (PyList_Sort(list) != 0) {
@@ -985,7 +985,7 @@ PySys_AddWarnOption(char *s)
 	}
 	str = PyString_FromString(s);
 	if (str != NULL) {
-		PyList_Append(warnoptions, str);
+		_Py_list_append(warnoptions, str);
 		Py_DECREF(str);
 	}
 }

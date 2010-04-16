@@ -83,6 +83,14 @@ comparison with the old peephole optimizer.
 
 /* ************** COMPILER RELATED OPTIMIZATIONS ************** */
 
+/* If defined, a strict control will be made against the opcode limits
+   in stack effect calculations.
+   If undefined, only standard opcodes must ben used
+   (which is the common case: no bad opcodes are expected into the regular
+    opcode stream). */
+
+#define WPY_SAFER_OPCODE_STACK_EFFECT
+
 /* Collects all the constants in a function definition. Example:
 
 def f():
@@ -290,6 +298,10 @@ That's because they're missing in the old peephole optimizer.
 
 */
 
+/* Enable the bytecode peepholer optimizer. */
+
+/* #define WPY_BYTECODE_PEEPHOLER */
+
 /* Replace UNARY_NOT JUMP_IF_FALSE
    with	   NOP JUMP_IF_TRUE, and
    UNARY_NOT JUMP_IF_FALSE_ELSE_POP
@@ -332,10 +344,6 @@ That's because they're missing in the old peephole optimizer.
 
 /* ************** CEVAL (AND PEEPHOLE) RELATED OPTIMIZATIONS ***************/
 
-/* Replace LOAD_CONST RETURN with RETURN_CONST. */
-
-#define WPY_RETURN_CONST
-
 /* Replace CALL_FUNCTION POP_TOP with CALL_PROCEDURE. */
 
 #define WPY_CALL_PROCEDURE
@@ -351,7 +359,7 @@ That's because they're missing in the old peephole optimizer.
 /* Replace BINARY_ADD STORE_FAST with ADD_TO_FAST NOP.
    Disabled because test_zipfile.py fails!*/
 
-/* #define WPY_ADD_TO_FAST */
+/*#define WPY_ADD_TO_FAST*/
 
 /* Replace LOAD_FAST STORE_FAST with MOVE_FAST_FAST. */
 
@@ -540,6 +548,10 @@ That's because they're missing in the old peephole optimizer.
 
 /* ************** MISCELLANEOUS ************** */
 
+/* Enable small integer (0..255) super instructions. */
+
+/* #define WPY_SMALLINT_SUPER_INSTRUCTIONS */
+
 /* Uncomment this if you want to disable most optimizations making WPython
    similar (but not equal) to CPython. */
 
@@ -618,6 +630,7 @@ That's because they're missing in the old peephole optimizer.
 #undef WPY_LOAD_GLOB_FAST_CALL_FUNC
 #undef WPY_FAST_ATTR_CALL_FUNC
 #undef WPY_FAST_ATTR_CALL_PROC
+#undef WPY_SMALLINT_SUPER_INSTRUCTIONS
 
 #endif
 

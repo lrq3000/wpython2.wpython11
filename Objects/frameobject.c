@@ -256,6 +256,7 @@ frame_setlineno(PyFrameObject *f, PyObject* p_new_lineno)
 			break;
 
 		case CONVERT(END_FINALLY):
+        case CONVERT(WITH_CLEANUP):
 			/* Ignore END_FINALLYs for SETUP_EXCEPTs - they exist
 			 * in the bytecode but don't correspond to an actual
 			 * 'finally' block.  (If blockstack_top is 0, we must

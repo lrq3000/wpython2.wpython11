@@ -276,7 +276,7 @@ stringlib_zfill(PyObject *self, PyObject *args)
 					 (right) - (left));	\
 	if (str == NULL)					\
 		goto onError;					\
-	if (PyList_Append(list, str)) {				\
+	if (_Py_list_append(list, str)) {				\
 		Py_DECREF(str);					\
 		goto onError;					\
 	}							\

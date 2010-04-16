@@ -131,7 +131,7 @@ heappush(PyObject *self, PyObject *args)
 		return NULL;
 	}
 
-	if (PyList_Append(heap, item) == -1)
+	if (_Py_list_append(heap, item) == -1)
 		return NULL;
 
 	if (_siftdown((PyListObject *)heap, 0, PyList_GET_SIZE(heap)-1) == -1)
@@ -314,7 +314,7 @@ nlargest(PyObject *self, PyObject *args)
 			else
 				goto sortit;
 		}
-		if (PyList_Append(heap, elem) == -1) {
+		if (_Py_list_append(heap, elem) == -1) {
 			Py_DECREF(elem);
 			goto fail;
 		}
@@ -483,7 +483,7 @@ nsmallest(PyObject *self, PyObject *args)
 			else
 				goto sortit;
 		}
-		if (PyList_Append(heap, elem) == -1) {
+		if (_Py_list_append(heap, elem) == -1) {
 			Py_DECREF(elem);
 			goto fail;
 		}

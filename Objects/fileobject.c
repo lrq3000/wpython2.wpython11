@@ -1574,7 +1574,7 @@ file_readlines(PyFileObject *f, PyObject *args)
 			line = PyString_FromStringAndSize(q, p-q);
 			if (line == NULL)
 				goto error;
-			err = PyList_Append(list, line);
+			err = _Py_list_append(list, line);
 			Py_DECREF(line);
 			if (err != 0)
 				goto error;
@@ -1605,7 +1605,7 @@ file_readlines(PyFileObject *f, PyObject *args)
 			if (line == NULL)
 				goto error;
 		}
-		err = PyList_Append(list, line);
+		err = _Py_list_append(list, line);
 		Py_DECREF(line);
 		if (err != 0)
 			goto error;

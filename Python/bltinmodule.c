@@ -242,6 +242,7 @@ builtin_filter(PyObject *self, PyObject *args)
 	PyObject *func, *seq, *result, *it, *arg;
 	Py_ssize_t len;   /* guess for result list size */
 	register Py_ssize_t j;
+    int booleanFunc;
 
 	if (!PyArg_UnpackTuple(args, "filter", 2, 2, &func, &seq))
 		return NULL;
@@ -283,6 +284,7 @@ builtin_filter(PyObject *self, PyObject *args)
 			goto Fail_it;
 	}
 
+    booleanFunc = func == (PyObject *)&PyBool_Type || func == Py_None;
 	/* Build the result list. */
 	j = 0;
 	for (;;) {
@@ -296,7 +298,7 @@ builtin_filter(PyObject *self, PyObject *args)
 			break;
 		}
 
-		if (func == (PyObject *)&PyBool_Type || func == Py_None) {
+		if (booleanFunc) {
 			ok = PyObject_IsTrue(item);
 		}
 		else {
@@ -315,7 +317,7 @@ builtin_filter(PyObject *self, PyObject *args)
 			if (j < len)
 				PyList_SET_ITEM(result, j, item);
 			else {
-				int status = PyList_Append(result, item);
+				int status = _Py_list_append(result, item);
 				Py_DECREF(item);
 				if (status < 0)
 					goto Fail_result_it;
@@ -992,7 +994,8 @@ builtin_map(PyObject *self, PyObject *args)
 		PyObject *alist, *item=NULL, *value;
 		int numactive = 0;
 
-		if (func == Py_None && n == 1)
+        /* TODO: looking at lines 940-948, may be we can remove the if. */
+        if (func == Py_None && n == 1)
 			alist = NULL;
 		else if ((alist = PyTuple_New(n)) == NULL)
 			goto Fail_1;
@@ -1039,7 +1042,7 @@ builtin_map(PyObject *self, PyObject *args)
 				goto Fail_1;
 		}
 		if (i >= len) {
-			int status = PyList_Append(result, value);
+			int status = _Py_list_append(result, value);
 			Py_DECREF(value);
 			if (status < 0)
 				goto Fail_1;
@@ -2499,7 +2502,7 @@ builtin_zip(PyObject *self, PyObject *args)
 		if (i < len)
 			PyList_SET_ITEM(ret, i, next);
 		else {
-			int status = PyList_Append(ret, next);
+			int status = _Py_list_append(ret, next);
 			Py_DECREF(next);
 			++len;
 			if (status < 0)

@@ -3,6 +3,7 @@
 
 #include "Python.h"
 #include <ctype.h>
+#include "wpython.h"
 
 static PyObject *int_int(PyIntObject *v);
 
@@ -63,19 +64,13 @@ fill_free_list(void)
 	return p + N_INTOBJECTS - 1;
 }
 
-#ifndef NSMALLPOSINTS
-#define NSMALLPOSINTS		257
-#endif
-#ifndef NSMALLNEGINTS
-#define NSMALLNEGINTS		5
-#endif
-#if NSMALLNEGINTS + NSMALLPOSINTS > 0
+#if _Py_Int_NSMALLNEGINTS + _Py_Int_NSMALLPOSINTS > 0
 /* References to small integers are saved in this array so that they
    can be shared.
    The integers that are saved are those in the range
-   -NSMALLNEGINTS (inclusive) to NSMALLPOSINTS (not inclusive).
+   -_Py_Int_NSMALLNEGINTS (inclusive) to _Py_Int_NSMALLPOSINTS (not inclusive).
 */
-static PyIntObject *small_ints[NSMALLNEGINTS + NSMALLPOSINTS];
+PyIntObject *_Py_Int_small_ints[_Py_Int_NSMALLNEGINTS + _Py_Int_NSMALLPOSINTS];
 #endif
 #ifdef COUNT_ALLOCS
 int quick_int_allocs, quick_neg_int_allocs;
@@ -85,9 +80,9 @@ PyObject *
 PyInt_FromLong(long ival)
 {
 	register PyIntObject *v;
-#if NSMALLNEGINTS + NSMALLPOSINTS > 0
-	if (-NSMALLNEGINTS <= ival && ival < NSMALLPOSINTS) {
-		v = small_ints[ival + NSMALLNEGINTS];
+#if _Py_Int_NSMALLNEGINTS + _Py_Int_NSMALLPOSINTS > 0
+	if (-_Py_Int_NSMALLNEGINTS <= ival && ival < _Py_Int_NSMALLPOSINTS) {
+		v = _Py_Int_small_ints[ival + _Py_Int_NSMALLNEGINTS];
 		Py_INCREF(v);
 #ifdef COUNT_ALLOCS
 		if (ival >= 0)
@@ -510,6 +505,53 @@ one that can lose catastrophic amounts of information, it's the native long
 product that must have overflowed.
 */
 
+#ifdef WPY_SMALLINT_SUPER_INSTRUCTIONS
+static PyObject *
+int_mul(PyObject *v, PyObject *w)
+{
+	register long a, b;
+
+	CONVERT_TO_LONG(v, a);
+	CONVERT_TO_LONG(w, b);
+    return _Py_int_mul(a, b);
+}
+
+PyObject *
+_Py_int_mul(register long a, register long b)
+{
+	long longprod;			/* a*b in native long arithmetic */
+	double doubled_longprod;	/* (double)longprod */
+	double doubleprod;		/* (double)a * (double)b */
+
+    longprod = a * b;
+	doubleprod = (double)a * (double)b;
+	doubled_longprod = (double)longprod;
+
+	/* Fast path for normal case:  small multiplicands, and no info
+	   is lost in either method. */
+	if (doubled_longprod == doubleprod)
+		return PyInt_FromLong(longprod);
+
+	/* Somebody somewhere lost info.  Close enough, or way off?  Note
+	   that a != 0 and b != 0 (else doubled_longprod == doubleprod == 0).
+	   The difference either is or isn't significant compared to the
+	   true value (of which doubleprod is a good approximation).
+	*/
+	{
+		const double diff = doubled_longprod - doubleprod;
+		const double absdiff = diff >= 0.0 ? diff : -diff;
+		const double absprod = doubleprod >= 0.0 ? doubleprod :
+							  -doubleprod;
+		/* absdiff/absprod <= 1/32 iff
+		   32 * absdiff <= absprod -- 5 good bits is "close enough" */
+		if (32.0 * absdiff <= absprod)
+			return PyInt_FromLong(longprod);
+		else
+            _Py_Int_FallBackOperation(PyLong_FromLong,
+                PyLong_Type.tp_as_number->nb_multiply(v, w));
+	}
+}
+#else
 static PyObject *
 int_mul(PyObject *v, PyObject *w)
 {
@@ -547,6 +589,7 @@ int_mul(PyObject *v, PyObject *w)
 			return PyLong_Type.tp_as_number->nb_multiply(v, w);
 	}
 }
+#endif
 
 /* Integer overflow checking for unary negation: on a 2's-complement
  * box, -x overflows iff x is the most negative long.  In this case we
@@ -559,15 +602,8 @@ int_mul(PyObject *v, PyObject *w)
 #define UNARY_NEG_WOULD_OVERFLOW(x)	\
 	((x) < 0 && (unsigned long)(x) == 0-(unsigned long)(x))
 
-/* Return type of i_divmod */
-enum divmod_result {
-	DIVMOD_OK,		/* Correct result */
-	DIVMOD_OVERFLOW,	/* Overflow, try again using longs */
-	DIVMOD_ERROR		/* Exception raised */
-};
-
-static enum divmod_result
-i_divmod(register long x, register long y,
+enum _Py_divmod_result
+_Py_i_divmod(register long x, register long y,
          long *p_xdivy, long *p_xmody)
 {
 	long xdivy, xmody;
@@ -604,7 +640,7 @@ int_div(PyIntObject *x, PyIntObject *y)
 	long d, m;
 	CONVERT_TO_LONG(x, xi);
 	CONVERT_TO_LONG(y, yi);
-	switch (i_divmod(xi, yi, &d, &m)) {
+	switch (_Py_i_divmod(xi, yi, &d, &m)) {
 	case DIVMOD_OK:
 		return PyInt_FromLong(d);
 	case DIVMOD_OVERFLOW:
@@ -625,7 +661,7 @@ int_classic_div(PyIntObject *x, PyIntObject *y)
 	if (Py_DivisionWarningFlag &&
 	    PyErr_Warn(PyExc_DeprecationWarning, "classic int division") < 0)
 		return NULL;
-	switch (i_divmod(xi, yi, &d, &m)) {
+	switch (_Py_i_divmod(xi, yi, &d, &m)) {
 	case DIVMOD_OK:
 		return PyInt_FromLong(d);
 	case DIVMOD_OVERFLOW:
@@ -656,7 +692,7 @@ int_mod(PyIntObject *x, PyIntObject *y)
 	long d, m;
 	CONVERT_TO_LONG(x, xi);
 	CONVERT_TO_LONG(y, yi);
-	switch (i_divmod(xi, yi, &d, &m)) {
+	switch (_Py_i_divmod(xi, yi, &d, &m)) {
 	case DIVMOD_OK:
 		return PyInt_FromLong(m);
 	case DIVMOD_OVERFLOW:
@@ -674,7 +710,7 @@ int_divmod(PyIntObject *x, PyIntObject *y)
 	long d, m;
 	CONVERT_TO_LONG(x, xi);
 	CONVERT_TO_LONG(y, yi);
-	switch (i_divmod(xi, yi, &d, &m)) {
+	switch (_Py_i_divmod(xi, yi, &d, &m)) {
 	case DIVMOD_OK:
 		return Py_BuildValue("(ll)", d, m);
 	case DIVMOD_OVERFLOW:
@@ -750,7 +786,7 @@ int_pow(PyIntObject *v, PyIntObject *w, PyIntObject *z)
 	}
 	if (iz) {
 	 	long div, mod;
-		switch (i_divmod(ix, iz, &div, &mod)) {
+		switch (_Py_i_divmod(ix, iz, &div, &mod)) {
 		case DIVMOD_OK:
 			ix = mod;
 			break;
@@ -803,6 +839,61 @@ int_invert(PyIntObject *v)
 	return PyInt_FromLong(~v->ob_ival);
 }
 
+#ifdef WPY_SMALLINT_SUPER_INSTRUCTIONS
+static PyObject *
+int_lshift(PyIntObject *v, PyIntObject *w)
+{
+	register long a, b;
+
+	CONVERT_TO_LONG(v, a);
+	CONVERT_TO_LONG(w, b);
+    return _Py_int_lshift(a, b);
+}
+
+PyObject *
+_Py_int_lshift(register long a, register long b)
+{
+	long c;
+
+	if (b < 0) {
+		PyErr_SetString(PyExc_ValueError, "negative shift count");
+		return NULL;
+	}
+	c = a << b;
+	if ((b >= LONG_BIT) || (a != Py_ARITHMETIC_RIGHT_SHIFT(long, c, b)))
+        _Py_Int_FallBackOperation(PyLong_FromLong,
+            PyNumber_Lshift(v, w));
+	return PyInt_FromLong(c);
+}
+
+static PyObject *
+int_rshift(PyIntObject *v, PyIntObject *w)
+{
+	register long a, b;
+	CONVERT_TO_LONG(v, a);
+	CONVERT_TO_LONG(w, b);
+    return _Py_int_rshift(a, b);
+}
+
+PyObject *
+_Py_int_rshift(register long a, register long b)
+{
+	if (b < 0) {
+		PyErr_SetString(PyExc_ValueError, "negative shift count");
+		return NULL;
+	}
+	if (b >= LONG_BIT) {
+		if (a < 0)
+			a = -1;
+		else
+			a = 0;
+	}
+	else {
+		a = Py_ARITHMETIC_RIGHT_SHIFT(long, a, b);
+	}
+	return PyInt_FromLong(a);
+}
+#else
 static PyObject *
 int_lshift(PyIntObject *v, PyIntObject *w)
 {
@@ -872,6 +963,7 @@ int_rshift(PyIntObject *v, PyIntObject *w)
 	}
 	return PyInt_FromLong(a);
 }
+#endif
 
 static PyObject *
 int_and(PyIntObject *v, PyIntObject *w)
@@ -1065,7 +1157,7 @@ _PyInt_Format(PyIntObject *v, int base, int newstyle)
 	assert(base >= 2 && base <= 36);
 
 	do {
-		/* I'd use i_divmod, except it doesn't produce the results
+		/* I'd use _Py_i_divmod, except it doesn't produce the results
 		   I want when n is negative.  So just duplicate the salient
 		   part here. */
 		long div = n / base;
@@ -1281,8 +1373,8 @@ _PyInt_Init(void)
 {
 	PyIntObject *v;
 	int ival;
-#if NSMALLNEGINTS + NSMALLPOSINTS > 0
-	for (ival = -NSMALLNEGINTS; ival < NSMALLPOSINTS; ival++) {
+#if _Py_Int_NSMALLNEGINTS + _Py_Int_NSMALLPOSINTS > 0
+	for (ival = -_Py_Int_NSMALLNEGINTS; ival < _Py_Int_NSMALLPOSINTS; ival++) {
               if (!free_list && (free_list = fill_free_list()) == NULL)
 			return 0;
 		/* PyObject_New is inlined */
@@ -1290,7 +1382,7 @@ _PyInt_Init(void)
 		free_list = (PyIntObject *)Py_TYPE(v);
 		PyObject_INIT(v, &PyInt_Type);
 		v->ob_ival = ival;
-		small_ints[ival + NSMALLNEGINTS] = v;
+		_Py_Int_small_ints[ival + _Py_Int_NSMALLNEGINTS] = v;
 	}
 #endif
 	return 1;
@@ -1329,14 +1421,14 @@ PyInt_ClearFreeList(void)
 						free_list;
 					free_list = p;
 				}
-#if NSMALLNEGINTS + NSMALLPOSINTS > 0
-				else if (-NSMALLNEGINTS <= p->ob_ival &&
-					 p->ob_ival < NSMALLPOSINTS &&
-					 small_ints[p->ob_ival +
-						    NSMALLNEGINTS] == NULL) {
+#if _Py_Int_NSMALLNEGINTS + _Py_Int_NSMALLPOSINTS > 0
+				else if (-_Py_Int_NSMALLNEGINTS <= p->ob_ival &&
+					 p->ob_ival < _Py_Int_NSMALLPOSINTS &&
+					 _Py_Int_small_ints[p->ob_ival +
+						    _Py_Int_NSMALLNEGINTS] == NULL) {
 					Py_INCREF(p);
-					small_ints[p->ob_ival +
-						   NSMALLNEGINTS] = p;
+					_Py_Int_small_ints[p->ob_ival +
+						   _Py_Int_NSMALLNEGINTS] = p;
 				}
 #endif
 			}
@@ -1359,11 +1451,11 @@ PyInt_Fini(void)
 	int i;
 	int u;			/* total unfreed ints per block */
 
-#if NSMALLNEGINTS + NSMALLPOSINTS > 0
+#if _Py_Int_NSMALLNEGINTS + _Py_Int_NSMALLPOSINTS > 0
 	PyIntObject **q;
 
-	i = NSMALLNEGINTS + NSMALLPOSINTS;
-	q = small_ints;
+	i = _Py_Int_NSMALLNEGINTS + _Py_Int_NSMALLPOSINTS;
+	q = _Py_Int_small_ints;
 	while (--i >= 0) {
 		Py_XDECREF(*q);
 		*q++ = NULL;

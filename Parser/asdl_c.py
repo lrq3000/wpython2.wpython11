@@ -795,9 +795,10 @@ static int obj2ast_object(PyObject* obj, PyObject** out, PyArena* arena)
 
 static int obj2ast_constant(PyObject* obj, PyObject** out, PyArena* arena)
 {
-    if (obj)
+    if (obj) {
         PyArena_AddPyObject(arena, obj);
-    Py_XINCREF(obj);
+        Py_INCREF(obj);
+    }
     *out = obj;
     return 0;
 }

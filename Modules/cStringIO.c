@@ -251,7 +251,7 @@ IO_readlines(IOobject *self, PyObject *args) {
 		line = PyString_FromStringAndSize (output, n);
 		if (!line) 
                         goto err;
-		if (PyList_Append (result, line) == -1) {
+		if (_Py_list_append(result, line) == -1) {
 			Py_DECREF (line);
 			goto err;
 		}

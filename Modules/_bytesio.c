@@ -358,7 +358,7 @@ bytesio_readlines(BytesIOObject *self, PyObject *args)
         line = PyString_FromStringAndSize(output, n);
         if (!line)
             goto on_error;
-        if (PyList_Append(result, line) == -1) {
+        if (_Py_list_append(result, line) == -1) {
             Py_DECREF(line);
             goto on_error;
         }

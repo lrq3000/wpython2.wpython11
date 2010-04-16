@@ -120,7 +120,7 @@ get_counts(void)
 			Py_DECREF(result);
 			return NULL;
 		}
-		if (PyList_Append(result, v) < 0) {
+		if (_Py_list_append(result, v) < 0) {
 			Py_DECREF(v);
 			Py_DECREF(result);
 			return NULL;
@@ -189,9 +189,9 @@ _Py_NegativeRefcount(const char *fname, int lineno, PyObject *op)
 	char buf[300];
 
 	PyOS_snprintf(buf, sizeof(buf),
-		      "%s:%i object at %p has negative ref count "
+		      "%s:%i %s object at %p has negative ref count "
 		      "%" PY_FORMAT_SIZE_T "d",
-		      fname, lineno, op, op->ob_refcnt);
+              fname, lineno, op->ob_type->tp_name, op, op->ob_refcnt);
 	Py_FatalError(buf);
 }
 
@@ -2247,7 +2247,7 @@ _Py_GetObjects(PyObject *self, PyObject *args)
 			if (op == &refchain)
 				return res;
 		}
-		if (PyList_Append(res, op) < 0) {
+		if (_Py_list_append(res, op) < 0) {
 			Py_DECREF(res);
 			return NULL;
 		}
@@ -2326,7 +2326,7 @@ Py_ReprEnter(PyObject *obj)
 		if (PyList_GET_ITEM(list, i) == obj)
 			return 1;
 	}
-	PyList_Append(list, obj);
+	_Py_list_append(list, obj);
 	return 0;
 }
 
@@ -2414,6 +2414,8 @@ _Py_object_relaxed_hash(PyObject *o)
         return _Py_list_relaxed_hash((PyListObject *) o);
 	else if	(PyDict_CheckExact(o))
         return _Py_dict_relaxed_hash((PyDictObject *) o);
+	else if	(PySlice_Check(o))
+        return _Py_slice_relaxed_hash((PySliceObject *) o);
     else
         return PyObject_Hash(o);
 }
@@ -2446,6 +2448,8 @@ _Py_object_strict_equal(PyObject *v, PyObject *w)
         result = _Py_list_strict_equal((PyListObject *) v, (PyListObject *) w);
     else if (PyTuple_CheckExact(v))
         result = _Py_tuple_strict_equal((PyTupleObject *) v, (PyTupleObject *) w);
+    else if (PySlice_Check(v))
+        result = _Py_slice_strict_equal((PySliceObject *) v, (PySliceObject *) w);
     else {
         result = do_cmp(v, w);
         result = result == -2 ? -1 : result == 0;

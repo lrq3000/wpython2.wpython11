@@ -754,9 +754,10 @@ def getargs(co):
                 oparg = ord(code[step + 1])
                 step += 2
                 if op >= dis.HAVE_ARGUMENT:
-                    op, value, size = dis.get_extended_opcode(code, step,
+                    op, values, size = dis.get_opcode_info(code, step,
                                                               op, oparg)
                     step += size + size
+                    value = values[0]
                     opname = dis.opname[op]
                     if opname in ('UNPACK_TUPLE', 'UNPACK_SEQUENCE'):
                         remain.append(value)

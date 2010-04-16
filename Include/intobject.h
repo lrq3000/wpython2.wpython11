@@ -19,6 +19,7 @@ _Py_TrueStruct and _Py_ZeroStruct in boolobject.h; don't use this.
 #ifdef __cplusplus
 extern "C" {
 #endif
+#include "wpython.h"
 
 typedef struct {
     PyObject_HEAD
@@ -73,6 +74,51 @@ PyAPI_FUNC(PyObject*) _PyInt_Format(PyIntObject* v, int base, int newstyle);
 PyAPI_FUNC(PyObject *) _PyInt_FormatAdvanced(PyObject *obj,
 					     char *format_spec,
 					     Py_ssize_t format_spec_len);
+
+/* Defined for compile.c in wordcode-based Pythons. */
+
+#ifndef _Py_Int_NSMALLPOSINTS
+#define _Py_Int_NSMALLPOSINTS		257
+#endif
+#ifndef _Py_Int_NSMALLNEGINTS
+#define _Py_Int_NSMALLNEGINTS		5
+#endif
+
+#define _Py_Int_FromByteNoRef(byte) ((PyObject *) _Py_Int_small_ints[ \
+                                    _Py_Int_NSMALLNEGINTS + (byte)])
+
+#ifdef WPY_SMALLINT_SUPER_INSTRUCTIONS
+#define _Py_Int_FallBackOperation(newtype, operation) { \
+    PyObject *v, *w, *u; \
+    v = newtype(a); \
+    if (v == NULL) \
+        return NULL; \
+    w = newtype(b); \
+    if (w == NULL) { \
+        Py_DECREF(v); \
+        return NULL; \
+    } \
+    u = operation; \
+    Py_DECREF(v); \
+    Py_DECREF(w); \
+    return u; \
+}
+
+PyObject * _Py_int_mul(register long a, register long b);
+#endif
+/* Return type of i_divmod */
+enum _Py_divmod_result {
+	DIVMOD_OK,		/* Correct result */
+	DIVMOD_OVERFLOW,	/* Overflow, try again using longs */
+	DIVMOD_ERROR		/* Exception raised */
+};
+
+enum _Py_divmod_result _Py_i_divmod(register long x, register long y,
+                                    long *p_xdivy, long *p_xmody);
+#ifdef WPY_SMALLINT_SUPER_INSTRUCTIONS
+PyObject *_Py_int_rshift(register long a, register long b);
+PyObject *_Py_int_lshift(register long a, register long b);
+#endif
 
 #ifdef __cplusplus
 }

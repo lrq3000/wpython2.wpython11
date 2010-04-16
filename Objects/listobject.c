@@ -259,8 +259,8 @@ PyList_Insert(PyObject *op, Py_ssize_t where, PyObject *newitem)
 	return ins1((PyListObject *)op, where, newitem);
 }
 
-static int
-app1(PyListObject *self, PyObject *v)
+int
+_Py_list_append(PyObject *self, PyObject *v)
 {
 	Py_ssize_t n = PyList_GET_SIZE(self);
 
@@ -271,7 +271,7 @@ app1(PyListObject *self, PyObject *v)
 		return -1;
 	}
 
-	if (list_resize(self, n+1) == -1)
+	if (list_resize((PyListObject *) self, n+1) == -1)
 		return -1;
 
 	Py_INCREF(v);
@@ -283,7 +283,7 @@ int
 PyList_Append(PyObject *op, PyObject *newitem)
 {
 	if (PyList_Check(op) && (newitem != NULL))
-		return app1((PyListObject *)op, newitem);
+		return _Py_list_append(op, newitem);
 	PyErr_BadInternalCall();
 	return -1;
 }
@@ -381,7 +381,7 @@ list_repr(PyListObject *v)
 		Py_LeaveRecursiveCall();
 		if (s == NULL)
 			goto Done;
-		status = PyList_Append(pieces, s);
+		status = _Py_list_append(pieces, s);
 		Py_DECREF(s);  /* append created a new ref */
 		if (status < 0)
 			goto Done;
@@ -779,7 +779,7 @@ listinsert(PyListObject *self, PyObject *args)
 static PyObject *
 listappend(PyListObject *self, PyObject *v)
 {
-	if (app1(self, v) == 0)
+	if (_Py_list_append((PyObject *) self, v) == 0)
 		Py_RETURN_NONE;
 	return NULL;
 }
@@ -874,7 +874,7 @@ listextend(PyListObject *self, PyObject *b)
 			++Py_SIZE(self);
 		}
 		else {
-			int status = app1(self, item);
+			int status = _Py_list_append((PyObject *) self, item);
 			Py_DECREF(item);  /* append creates a new ref */
 			if (status < 0)
 				goto error;

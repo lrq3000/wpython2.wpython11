@@ -7,53 +7,8 @@ from opcode import *
 from opcode import __all__ as _opcodes_all
 
 __all__ = ["dis","disassemble","distb","disco",
-           "get_extended_opcode"] + _opcodes_all
+           "get_opcode_info"] + _opcodes_all
 del _opcodes_all
-
-FAST_ADD = opmap['FAST_ADD']
-CONST_ADD = opmap['CONST_ADD']
-MOVE_FAST_FAST = opmap['MOVE_FAST_FAST']
-MOVE_CONST_FAST = opmap['MOVE_CONST_FAST']
-MOVE_GLOBAL_FAST = opmap['MOVE_GLOBAL_FAST']
-MOVE_FAST_ATTR_FAST = opmap['MOVE_FAST_ATTR_FAST']
-MOVE_FAST_FAST_ATTR = opmap['MOVE_FAST_FAST_ATTR']
-MOVE_CONST_FAST_ATTR = opmap['MOVE_CONST_FAST_ATTR']
-MOVE_FAST_ATTR_FAST_ATTR = opmap['MOVE_FAST_ATTR_FAST_ATTR']
-LOAD_FAST_ATTR = opmap['LOAD_FAST_ATTR']
-STORE_FAST_ATTR = opmap['STORE_FAST_ATTR']
-FAST_ADD_FAST_TO_FAST = opmap['FAST_ADD_FAST_TO_FAST']
-FAST_INPLACE_ADD_FAST = opmap['FAST_INPLACE_ADD_FAST']
-FAST_UNOP_TO_FAST = opmap['FAST_UNOP_TO_FAST']
-FAST_INPLACE_BINOP_FAST = opmap['FAST_INPLACE_BINOP_FAST']
-FAST_POW_FAST_TO_FAST = opmap['FAST_POW_FAST_TO_FAST']
-FAST_OR_FAST_TO_FAST = opmap['FAST_OR_FAST_TO_FAST']
-CONST_ADD_FAST_TO_FAST = opmap['CONST_ADD_FAST_TO_FAST']
-FAST_ADD_CONST_TO_FAST = opmap['FAST_ADD_CONST_TO_FAST']
-FAST_INPLACE_ADD_CONST = opmap['FAST_INPLACE_ADD_CONST']
-CONST_POW_FAST_TO_FAST = opmap['CONST_POW_FAST_TO_FAST']
-CONST_OR_FAST_TO_FAST = opmap['CONST_OR_FAST_TO_FAST']
-FAST_POW_CONST_TO_FAST = opmap['FAST_POW_CONST_TO_FAST']
-FAST_OR_CONST_TO_FAST = opmap['FAST_OR_CONST_TO_FAST']
-FAST_ADD_FAST = opmap['FAST_ADD_FAST']
-FAST_BINOP_FAST = opmap['FAST_BINOP_FAST']
-CONST_ADD_FAST = opmap['CONST_ADD_FAST']
-CONST_BINOP_FAST = opmap['CONST_BINOP_FAST']
-FAST_ADD_CONST = opmap['FAST_ADD_CONST']
-FAST_BINOP_CONST = opmap['FAST_BINOP_CONST']
-FAST_ADD_TO_FAST = opmap['FAST_ADD_TO_FAST']
-FAST_BINOP_TO_FAST = opmap['FAST_BINOP_TO_FAST']
-CONST_ADD_TO_FAST = opmap['CONST_ADD_TO_FAST']
-CONST_BINOP_TO_FAST = opmap['CONST_BINOP_TO_FAST']
-UNOP_TO_FAST = opmap['UNOP_TO_FAST']
-BINOP_TO_FAST = opmap['BINOP_TO_FAST']
-FAST_UNOP = opmap['FAST_UNOP']
-FAST_BINOP = opmap['FAST_BINOP']
-CONST_BINOP = opmap['CONST_BINOP']
-LOAD_GLOBAL_ATTR = opmap['LOAD_GLOBAL_ATTR']
-CALL_PROC_RETURN_CONST = opmap['CALL_PROC_RETURN_CONST']
-LOAD_GLOB_FAST_CALL_FUNC = opmap['LOAD_GLOB_FAST_CALL_FUNC']
-FAST_ATTR_CALL_FUNC = opmap['FAST_ATTR_CALL_FUNC']
-FAST_ATTR_CALL_PROC = opmap['FAST_ATTR_CALL_PROC']
 
 codeobject_types = frozenset((types.MethodType,
                     types.FunctionType,
@@ -106,18 +61,21 @@ def distb(tb=None, deep=False):
         while tb.tb_next: tb = tb.tb_next
     disassemble(tb.tb_frame.f_code, tb.tb_lasti, deep)
 
-def get_extended_opcode(code, i, op, oparg):
-    """Checks for an extended opcode, giving back the real opcode,
-argument and additional wordsize """
-    if op >= EXTENDED_ARG32:
-        return oparg, ord(code[i]) + ord(code[i + 1]) * 256 + \
-            ord(code[i + 2]) * 65536 + ord(code[i + 3]) * 16777216, 2
+def get_opcode_info(code, i, op, oparg):
+    "Returns the real opcode, arguments, and additional wordsize "
+    if op > EXTENDED_ARG16:
+        if op < EXTENDED_ARG32:
+            return op, (oparg, ord(code[i]), ord(code[i + 1])), 1
+        elif op == EXTENDED_ARG32:
+            return oparg, (ord(code[i]) + ord(code[i + 1]) * 256 + \
+                ord(code[i + 2]) * 65536 + ord(code[i + 3]) * 16777216, ), 2
+        else:
+            return op, (oparg, ord(code[i]), ord(code[i + 1]),
+                ord(code[i + 2]), ord(code[i + 3])), 2
     elif op == EXTENDED_ARG16:
-        return oparg, ord(code[i]) + ord(code[i + 1]) * 256, 1
-    elif op > EXTENDED_ARG16:
-        return op, (oparg, ord(code[i]), ord(code[i + 1])), 1
+        return oparg, (ord(code[i]) + ord(code[i + 1]) * 256, ), 1
     else:
-        return op, oparg, 0
+        return op, (oparg, ), 0
 
 def disassemble(co, lasti=-1, deep=False):
     """Disassemble a code object."""
@@ -133,32 +91,64 @@ def common_disassemble(code, lasti, deep, linestarts,
                        varnames, names, constants, frees):
     """Disassemble a code object."""
 
-    def get_const(index):
+    def eval_arg_not_used(arg):
+        return ''
+
+    def eval_arg_int(arg):
+        return str(arg)
+
+    def eval_arg_const(arg):
         if constants:
-            const = constants[index]
+            const = constants[arg]
             if deep and type(const) in codeobject_types:
               code_objects.append(const)
-            return repr(const)
+            return '%d (%r)' % (arg, const)
         else:
-            return '(%d)' % index
+            return '(%d)' % arg
 
-    def get_name(index):
-        if names is not None:
-            return names[index]
-        else:
-            return '(%d)' % index
-
-    def get_varname(index):
+    def eval_arg_local(arg):
         if varnames is not None:
-            return varnames[index]
+            local = varnames[arg]
+            return '%d (%s)' % (arg, local)
         else:
-            return '(%d)' % index
+            return '(%d)' % arg
 
-    def get_free(index):
+    def eval_arg_free(arg):
         if frees is not None:
-            return frees[index]
+            free = frees[arg]
+            return '%d (%s)' % (arg, free)
         else:
-            return '(%d)' % index
+            return '(%d)' % arg
+
+    def eval_arg_name(arg):
+        if names is not None:
+            name = names[arg]
+            return '%d (%s)' % (arg, name)
+        else:
+            return '(%d)' % arg
+
+    def eval_arg_quick_func(arg):
+        return '%d (%d %d)' % (arg, arg & 15, arg >> 4)
+
+    def eval_arg_jrel(arg):
+        return '%d (to %d)' % (arg, offset + arg)
+
+    def eval_arg_jabs(arg):
+        return repr(arg)
+
+    def eval_arg_unary(arg):
+        return '%d (%s)' % (arg, unary_op[arg])
+
+    def eval_arg_binary(arg):
+        return '%d (%s)' % (arg, binary_op[arg])
+
+    def eval_arg_ternary(arg):
+        return '%d (%s)' % (arg, ternary_op[arg])
+
+    evaluators = (eval_arg_not_used, eval_arg_int, eval_arg_const,
+        eval_arg_local, eval_arg_free, eval_arg_name,
+        eval_arg_quick_func, eval_arg_jrel, eval_arg_jabs,
+        eval_arg_unary, eval_arg_binary, eval_arg_ternary)
 
     labels = findlabels(code)
     n = len(code)
@@ -181,154 +171,20 @@ def common_disassemble(code, lasti, deep, linestarts,
         else: print '  ',
         print repr(offset).rjust(4),
         offset += 1
-        if op >= HAVE_ARGUMENT:
-            op, oparg, size = get_extended_opcode(code, i, op, oparg)
-            i += size + size
-            offset += size
-            print opname[op].ljust(25),
-            if EXTENDED_ARG16 < op < EXTENDED_ARG32:
-                print ''.rjust(5),
-                if op == MOVE_FAST_FAST:
-                    print get_varname(oparg[0]) + ' -> ' + \
-                        get_varname(oparg[1])
-                elif op == MOVE_CONST_FAST:
-                    print get_const(oparg[0]) + ' -> ' + \
-                            get_varname(oparg[1])
-                elif op == MOVE_GLOBAL_FAST:
-                    print get_name(oparg[0]) + ' -> ' + \
-                        get_varname(oparg[1])
-                elif op == MOVE_FAST_ATTR_FAST:
-                    print get_varname(oparg[0]) + '.' + get_name(oparg[1]) + \
-                        ' -> ' + get_varname(oparg[2])
-                elif op == MOVE_FAST_FAST_ATTR:
-                    print get_varname(oparg[0]) + ' -> ' + \
-                          get_varname(oparg[1]) + '.' + get_name(oparg[2])
-                elif op == MOVE_CONST_FAST_ATTR:
-                    print get_const(oparg[0]) + ' -> ' + \
-                          get_varname(oparg[1]) + '.' + get_name(oparg[2])
-                elif op == MOVE_FAST_ATTR_FAST_ATTR:
-                    print get_varname(oparg[0]) + '.' + get_name(oparg[1]) + \
-                          ' -> ' + get_varname(oparg[0]) + '.' + \
-                          get_name(oparg[2])
-                elif op == LOAD_FAST_ATTR:
-                    print get_varname(oparg[0]) + '.' + get_name(oparg[1])
-                elif op == STORE_FAST_ATTR:
-                    print ' -> ' + get_varname(oparg[0]) + '.' + \
-                          get_name(oparg[1])
-                elif op == FAST_ADD_FAST_TO_FAST:
-                    print get_varname(oparg[0]) + ' + ' + \
-                        get_varname(oparg[1]) + ' -> ' + \
-                        get_varname(oparg[2])
-                elif op == FAST_INPLACE_ADD_FAST:
-                    print get_varname(oparg[0]) + ' += ' + \
-                        get_varname(oparg[1])
-                elif op == FAST_UNOP_TO_FAST:
-                    print unary_op[oparg[1]] + ' ' + get_varname(oparg[0]) + \
-                        ' -> ' + get_varname(oparg[2])
-                elif op == FAST_INPLACE_BINOP_FAST:
-                    print get_varname(oparg[0]) + ' ' + binary_op[oparg[2]] + \
-                        ' ' + get_varname(oparg[1]) + ' -> ' + \
-                        get_varname(oparg[0])
-                elif FAST_POW_FAST_TO_FAST <= op <= FAST_OR_FAST_TO_FAST:
-                    print get_varname(oparg[0]) + ' ' + \
-                          binary_op[op - FAST_POW_FAST_TO_FAST] + \
-                        ' ' + get_varname(oparg[1]) + ' -> ' + \
-                        get_varname(oparg[2])
-                elif op == CONST_ADD_FAST_TO_FAST:
-                    print get_const(oparg[0]) + ' + ' + \
-                        get_varname(oparg[1]) + ' -> ' + \
-                        get_varname(oparg[2])
-                elif op == FAST_ADD_CONST_TO_FAST:
-                    print get_varname(oparg[0]) + ' + ' + \
-                        get_const(oparg[1]) + ' -> ' + \
-                        get_varname(oparg[2])
-                elif op == FAST_INPLACE_ADD_CONST:
-                    print get_varname(oparg[0]) + ' += ' + \
-                        get_const(oparg[1])
-                elif CONST_POW_FAST_TO_FAST <= op <= CONST_OR_FAST_TO_FAST:
-                    print get_const(oparg[0]) + ' ' + \
-                          binary_op[op - CONST_POW_FAST_TO_FAST] + \
-                        ' ' + get_varname(oparg[1]) + ' -> ' + \
-                        get_varname(oparg[2])
-                elif FAST_POW_CONST_TO_FAST <= op <= FAST_OR_CONST_TO_FAST:
-                    print get_varname(oparg[0]) + ' ' + \
-                          binary_op[op - FAST_POW_CONST_TO_FAST] + \
-                        ' ' + get_const(oparg[1]) + ' -> ' + \
-                        get_varname(oparg[2])
-                elif op == FAST_ADD_FAST:
-                    print get_varname(oparg[0]) + ' + ' + \
-                        get_varname(oparg[1])
-                elif op == FAST_BINOP_FAST:
-                    print get_varname(oparg[0]) + ' ' + binary_op[oparg[2]] + \
-                        ' ' + get_varname(oparg[1])
-                elif op == CONST_ADD_FAST:
-                    print get_const(oparg[0]) + ' + ' + \
-                        get_varname(oparg[1])
-                elif op == CONST_BINOP_FAST:
-                    print get_const(oparg[0]) + ' ' + binary_op[oparg[2]] + \
-                        ' ' + get_varname(oparg[1])
-                elif op == FAST_ADD_CONST:
-                    print get_varname(oparg[0]) + ' + ' + \
-                        get_const(oparg[1])
-                elif op == FAST_BINOP_CONST:
-                    print get_varname(oparg[0]) + ' ' + binary_op[oparg[2]] + \
-                        ' ' + get_const(oparg[1])
-                elif op == FAST_ADD_TO_FAST:
-                    print '+ ' + get_varname(oparg[0]) + ' -> ' + \
-                        get_varname(oparg[1])
-                elif op == FAST_BINOP_TO_FAST:
-                    print binary_op[oparg[1]] + ' ' + \
-                        get_varname(oparg[0]) + ' -> ' + \
-                        get_varname(oparg[2])
-                elif op == CONST_ADD_TO_FAST:
-                    print '+ ' + get_const(oparg[0]) + ' -> ' + \
-                        get_varname(oparg[1])
-                elif op == CONST_BINOP_TO_FAST:
-                    print binary_op[oparg[1]] + ' ' + \
-                        get_const(oparg[0]) + ' -> ' + \
-                        get_varname(oparg[2])
-                elif op == UNOP_TO_FAST:
-                    print unary_op[oparg[0]] + ' -> ' + \
-                        get_varname(oparg[1])
-                elif op == BINOP_TO_FAST:
-                    print binary_op[oparg[0]] + ' -> ' + \
-                        get_varname(oparg[1])
-                elif op == FAST_UNOP:
-                    print unary_op[oparg[1]] + ' ' + get_varname(oparg[0])
-                elif op == FAST_BINOP:
-                    print binary_op[oparg[1]] + ' ' + get_varname(oparg[0])
-                elif op == CONST_BINOP:
-                    print binary_op[oparg[1]] + ' ' + get_const(oparg[0])
-                elif op == LOAD_GLOBAL_ATTR:
-                    print get_name(oparg[0]) + '.' + get_name(oparg[1])
-                elif op == CALL_PROC_RETURN_CONST:
-                    print str(oparg[0]) + '; RETURN ' + get_const(oparg[1])
-                elif op == LOAD_GLOB_FAST_CALL_FUNC:
-                    print get_name(oparg[0]) + '; ' + get_varname(oparg[1]) + \
-                          '; CALL ' + str(oparg[2])
-                elif op == FAST_ATTR_CALL_FUNC:
-                    print get_varname(oparg[0]) + '.' + get_name(oparg[1]) + \
-                          '()'
-                elif op == FAST_ATTR_CALL_PROC:
-                    print get_varname(oparg[0]) + '.' + get_name(oparg[1]) + \
-                          '()'
-            else:
-                print repr(oparg).rjust(5),
-                if op in hasconst:
-                    print '(' + get_const(oparg) + ')',
-                elif op in hasname:
-                    print '(' + get_name(oparg) + ')',
-                elif op in hasjrel:
-                    print '(to ' + repr(offset + oparg) + ')',
-                elif op in haslocal:
-                    print '(' + get_varname(oparg) + ')',
-                elif op in hasfree:
-                    print '(' + get_free(oparg) + ')',
-        else:
-            print opname[op, oparg].ljust(30),
-            if (op, oparg) in hascompare:
-                print ' (' + cmp_op[oparg - hascompare[0][1]] + ')',
-        print
+        op, args, size = get_opcode_info(code, i, op, oparg)
+        i += size + size
+        offset += size
+        key = op, args[0]
+        name = opname.get(key, None)
+        if name is None:
+            key = op
+            name = opname[key]
+        str_args_list = []
+        append = str_args_list.append
+        for arg, info in zip(args, opargs[key]):
+            if info != arg_not_used:
+                append(evaluators[info](arg))
+        print name.ljust(30), ' '.join(str_args_list)
     check_code_objects(code_objects)
 
 def check_code_objects(code_objects):
@@ -345,7 +201,8 @@ def findlabels(code):
     Return the list of offsets.
 
     """
-    labels = []
+    labels = set()
+    add = labels.add
     n = len(code)
     i = offset = 0
     while i < n:
@@ -354,17 +211,14 @@ def findlabels(code):
         i += 2
         offset += 1
         if op >= HAVE_ARGUMENT:
-            op, oparg, size = get_extended_opcode(code, i, op, oparg)
+            op, args, size = get_opcode_info(code, i, op, oparg)
             i += size + size
             offset += size
-            label = -1
-            if op in hasjrel:
-                label = offset + oparg
-            elif op in hasjabs:
-                label = oparg
-            if label >= 0:
-                if label not in labels:
-                    labels.append(label)
+            for arg, info in zip(args, opargs[op]):
+                if info == arg_jrel:
+                    add(offset + arg)
+                elif info == arg_jabs:
+                    add(arg)
     return labels
 
 def findlinestarts(code):

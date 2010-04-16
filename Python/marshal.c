@@ -41,6 +41,7 @@
 #define TYPE_UNKNOWN		'?'
 #define TYPE_SET		'<'
 #define TYPE_FROZENSET  	'>'
+#define TYPE_SLICE  	':'
 
 typedef struct {
 	FILE *fp;
@@ -386,6 +387,13 @@ w_object(PyObject *v, WFILE *p)
 		}
 		w_long((long)n, p);
 		w_string(s, (int)n, p);
+	}
+	else if (PySlice_Check(v)) {
+		PySliceObject *s = (PySliceObject *)v;
+		w_byte(TYPE_SLICE, p);
+        w_object(s->start, p);
+        w_object(s->stop, p);
+        w_object(s->step, p);
 	}
 	else {
 		w_byte(TYPE_UNKNOWN, p);
@@ -970,6 +978,35 @@ r_object(RFILE *p)
 		}
 		retval = v;
 		break;
+
+	case TYPE_SLICE:
+		{
+		PyObject *start = NULL;
+		PyObject *stop = NULL;
+		PyObject *step = NULL;
+		
+		v = NULL;
+
+		start = r_object(p);
+		if (start == NULL)
+			goto slice_error;
+		stop = r_object(p);
+		if (stop == NULL)
+			goto slice_error;
+		step = r_object(p);
+		if (step == NULL)
+			goto slice_error;
+
+		v = (PyObject *) PySlice_New(start, stop, step);
+
+	  slice_error:
+		Py_XDECREF(start);
+		Py_XDECREF(stop);
+		Py_XDECREF(step);
+
+		retval = v;
+		break;
+		}
 
 	default:
 		/* Bogus data got written, which isn't ideal.

@@ -359,3 +359,36 @@ PyTypeObject PySlice_Type = {
 	0,					/* tp_alloc */
 	slice_new,				/* tp_new */
 };
+
+/* Defined for compile.c in wordcode-based Pythons */
+
+long
+_Py_slice_relaxed_hash(PySliceObject *v)
+{
+	long x, y;
+    y = _Py_object_relaxed_hash(v->start);
+    if (y == -1)
+	    return -1;
+    x = (0x345678L ^ y) * 1000003L;
+    y = _Py_object_relaxed_hash(v->stop);
+    if (y == -1)
+	    return -1;
+    x = (x ^ y) * 1082523L;
+    y = _Py_object_relaxed_hash(v->step);
+    if (y == -1)
+	    return -1;
+    x = (x ^ y) * 1165043L + 97531L;
+	if (x == -1) x = -2;
+	return x;
+}
+
+int
+_Py_slice_strict_equal(PySliceObject *vs, PySliceObject *ws)
+{
+	int cmp;
+    cmp = _Py_object_strict_equal(vs->start, ws->start);
+	if (cmp <= 0) return cmp;
+    cmp = _Py_object_strict_equal(vs->stop, ws->stop);
+	if (cmp <= 0) return cmp;
+    return _Py_object_strict_equal(vs->step, ws->step);
+}

@@ -314,8 +314,8 @@ class TraceTestCase(unittest.TestCase):
         self.run_test2(settrace_and_return)
     def test_09_settrace_and_raise(self):
         self.run_test2(settrace_and_raise)
-    def test_10_ireturn(self):
-        self.run_test(ireturn_example)
+#    def test_10_ireturn(self):
+#        self.run_test(ireturn_example)
     def test_11_tightloop(self):
         self.run_test(tightloop_example)
     def test_12_tighterloop(self):
@@ -343,8 +343,7 @@ class TraceTestCase(unittest.TestCase):
             onliners,
             [(0, 'call'),
              (1, 'line'),
-             (3, 'line'),
-             (3, 'return')])
+             (1, 'return')])
 
     def test_15_loops(self):
         # issue1750076: "while" expression is skipped by debugger

@@ -1299,7 +1299,7 @@ fill_classic_mro(PyObject *mro, PyObject *cls)
 	if (i < 0)
 		return -1;
 	if (!i) {
-		if (PyList_Append(mro, cls) < 0)
+		if (_Py_list_append(mro, cls) < 0)
 			return -1;
 	}
 	bases = ((PyClassObject *)cls)->cl_bases;
@@ -2649,7 +2649,7 @@ type_subclasses(PyTypeObject *type, PyObject *args_ignored)
 		assert(PyWeakref_CheckRef(ref));
 		ref = PyWeakref_GET_OBJECT(ref);
 		if (ref != Py_None) {
-			if (PyList_Append(list, ref) < 0) {
+			if (_Py_list_append(list, ref) < 0) {
 				Py_DECREF(list);
 				return NULL;
 			}

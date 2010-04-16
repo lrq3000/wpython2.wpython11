@@ -180,8 +180,7 @@ remove_unreachable_code(unsigned short *codestr, Py_ssize_t codelen,
 }
 #endif
 
-/* Replace LOAD_CONST RETURN with NOP RETURN_CONST.
-   Skip over LOAD_CONST trueconst JUMP_IF_FALSE xx
+/* Skip over LOAD_CONST trueconst JUMP_IF_FALSE xx
    Skip over LOAD_CONST trueconst JUMP_IF_FALSE_ELSE_POP xx */
 static void
 handle_load_const(unsigned short *codestr, Py_ssize_t codelen,
@@ -190,20 +189,6 @@ handle_load_const(unsigned short *codestr, Py_ssize_t codelen,
 {
 	int opcode;
 	int rawopcode = codestr[i + long_const + 1];
-#ifdef WPY_RETURN_CONST
-	if (rawopcode == CONVERT(RETURN_VALUE) &&
-		ISBASICBLOCK(i, 2 + long_const)) {
-		if (long_const) {
-			codestr[i + 2] = codestr[i + 1]; /* Move const forward */
-			opcode = EXT16(RETURN_CONST);
-		}
-		else
-			opcode = PACKOPCODE(RETURN_CONST, oparg);
-		codestr[i + 1] = opcode;
-		codestr[i] = CONVERT(NOP);
-		return;
-	}
-#endif
 	if (PyObject_IsTrue(PyTuple_GET_ITEM(consts, oparg))) {
 		opcode = EXTRACTOP(rawopcode);
 		if (rawopcode == EXT16(JUMP_IF_FALSE) &&
@@ -272,7 +257,7 @@ load_fast_superinstructions(unsigned short *codestr,
 			codestr[i + 3] = CONVERT(NOP);
 #endif
 		}
-		else if (EXTRACTOP(codestr[i + 2]) == CALL_FUNCTION &&
+		else if (EXTRACTOP(codestr[i + 2]) == QUICK_CALL_FUNCTION &&
 			EXTRACTARG(codestr[i + 2]) == 0 && ISBASICBLOCK(i, 3)) {
 			if (codestr[i + 3] == CONVERT(POP_TOP) && ISBASICBLOCK(i, 4)) {
 #ifdef WPY_FAST_ATTR_CALL_PROC
@@ -629,7 +614,7 @@ load_global_superinstructions(unsigned short *codestr,
 #endif
 #ifdef WPY_LOAD_GLOB_FAST_CALL_FUNC
 	else if (EXTRACTOP(codestr[i + 1]) == LOAD_FAST &&
-		EXTRACTOP(codestr[i + 2]) == CALL_FUNCTION && ISBASICBLOCK(i, 3)) {
+		EXTRACTOP(codestr[i + 2]) == QUICK_CALL_FUNCTION && ISBASICBLOCK(i, 3)) {
 		codestr[i] = PACKOPCODE(LOAD_GLOB_FAST_CALL_FUNC, oparg);
 		opcode = EXTRACTARG(codestr[i + 1]);
 		oparg = EXTRACTARG(codestr[i + 2]);
@@ -678,6 +663,8 @@ PyCode_Optimize(PyObject *code, PyObject* consts, PyObject *names,
     int tabsiz;
 	BLOCKS_ADDRMAP_TYPE nops, new_line, cum_orig_line, last_line;
 
+	assert(PyTuple_Check(consts));
+
 	/* Bail out if an exception is set */
 	if (PyErr_Occurred())
 		goto exitUnchanged;
@@ -700,17 +687,11 @@ PyCode_Optimize(PyObject *code, PyObject* consts, PyObject *names,
 	   instructions without additional checks to make sure they are not
 	   looking beyond the end of the code string.
 	*/
-	GETWORD((unsigned short *) PyString_AS_STRING(code) + codelen - 1, rawopcode);
-	if (rawopcode != RETURN_VALUE)
+	GETWORD((unsigned short *) PyString_AS_STRING(code) + codelen - 1,
+        rawopcode);
+	if (rawopcode != RETURN_VALUE && EXTRACTOP(rawopcode) != RETURN_CONST &&
+        rawopcode != RETURN_LOCALS)
 		goto exitUnchanged;
-
-#ifndef WPY_STATIC_BUFFER_ALLOCATION
-	codestr = (unsigned short *) PyMem_Malloc(codelen << 1);
-	if (codestr == NULL)
-		goto exitUnchanged;
-#endif
-	/* Make a modifiable copy of the code string */
-	memcpy(codestr, PyString_AS_STRING(code), codelen << 1);
 
 #ifndef WPY_STATIC_BUFFER_ALLOCATION
 	scratchpad = (BLOCKS_ADDRMAP_TYPE *)
@@ -723,10 +704,16 @@ PyCode_Optimize(PyObject *code, PyObject* consts, PyObject *names,
 	addrmap = blocks = scratchpad;
 
 	/* Mark jump blocks and verify that no EXTENDED_ARG32 was found */
-	if (markblocks(codestr, codelen, blocks) < 0)
+	if (markblocks((unsigned short *) PyString_AS_STRING(code), codelen, blocks) < 0)
 		goto exitUnchanged;
 
-	assert(PyTuple_Check(consts));
+#ifndef WPY_STATIC_BUFFER_ALLOCATION
+	codestr = (unsigned short *) PyMem_Malloc(codelen << 1);
+	if (codestr == NULL)
+		goto exitUnchanged;
+#endif
+	/* Make a modifiable copy of the code string */
+	memcpy(codestr, PyString_AS_STRING(code), codelen << 1);
 
 	for (i = 0; i < codelen; i += CODESIZE(opcode)) {
 		rawopcode = codestr[i];
@@ -769,22 +756,17 @@ PyCode_Optimize(PyObject *code, PyObject* consts, PyObject *names,
 			case CONVERT(RAISE_3):
 			case CONVERT(BREAK_LOOP):
 			case CONVERT(RETURN_VALUE):
-#ifdef WPY_RETURN_CONST
+            case CONVERT(RETURN_LOCALS):
 			case EXT16(RETURN_CONST):
-#endif
 				/* Add 1 to i if instruction was 16 bits RETURN_CONST */
 				remove_unreachable_code(codestr, codelen, blocks,
-					i
-#ifdef WPY_RETURN_CONST
-                    + (rawopcode == EXT16(RETURN_CONST))
-#endif
+					i + (rawopcode == EXT16(RETURN_CONST))
                 );
 				break;
 #endif
 
 #ifdef WPY_ADD_TO_FAST
 			case CONVERT(BINARY_ADD):
-				break;
 				if (EXTRACTOP(codestr[i + 1]) == STORE_FAST &&
 					ISBASICBLOCK(i, 2)) {
 					oparg = EXTRACTARG(codestr[i + 1]);
@@ -799,22 +781,6 @@ PyCode_Optimize(PyObject *code, PyObject* consts, PyObject *names,
 				handle_load_const(codestr, codelen, blocks, consts,
 								  i, oparg, 1);
 				break;
-
-#ifdef WPY_CALL_PROCEDURE
-				/* Replace CALL_FUNCTION POP_TOP with CALL_PROCEDURE NOP */
-			case EXT16(CALL_FUNCTION):
-			case EXT16(CALL_FUNCTION_VAR):
-			case EXT16(CALL_FUNCTION_KW):
-			case EXT16(CALL_FUNCTION_VAR_KW):
-				if (codestr[i + 2] == CONVERT(POP_TOP) &&
-					ISBASICBLOCK(i, 3)) {
-					/* CALL_PROCEDURE is exactly 4 opcodes forward */
-					opcode = EXTRACTARG(rawopcode) + 4;
-					codestr[i] = EXT16(opcode);
-					codestr[i + 2] = CONVERT(NOP);
-				}
-				break;
-#endif
 
 #ifdef WPY_BUILD_UNPACK_TO_ROT
 				/* Skip over BUILD_SEQN 1 UNPACK_SEQN 1.
@@ -842,7 +808,7 @@ PyCode_Optimize(PyObject *code, PyObject* consts, PyObject *names,
 					} else if (oparg == 3) {
 						codestr[i] = CONVERT(ROT_THREE);
 						codestr[i + 1] = CONVERT(ROT_TWO);
-				}
+				    }
 				break;
 #endif
 
@@ -936,16 +902,14 @@ PyCode_Optimize(PyObject *code, PyObject* consts, PyObject *names,
 			case EXT16(SETUP_EXCEPT):
 			case EXT16(SETUP_FINALLY):
 			case EXT16(CONTINUE_LOOP):
-			case EXT16(FOR_ITER):
-			case EXT16(LIST_APPEND_LOOP): {
+			case EXT16(FOR_ITER): {
 				int tgtrawopcode, tgtopcode;
 
 				GETWORD(codestr + i + 1, oparg);
 				tgt = GETJUMPTARGET16(rawopcode, oparg, i + 2);
 #ifdef WPY_REMOVE_UNREACHABLE_CODE
 				if (UNCONDITIONAL_JUMP16(rawopcode) ||
-					rawopcode == EXT16(CONTINUE_LOOP) ||
-					rawopcode == EXT16(LIST_APPEND_LOOP)) {
+					rawopcode == EXT16(CONTINUE_LOOP)) {
 					if (remove_unreachable_code(codestr, codelen, blocks,
 												i + 1) - codestr == tgt &&
 						rawopcode == EXT16(JUMP_FORWARD)) {
@@ -961,11 +925,13 @@ PyCode_Optimize(PyObject *code, PyObject* consts, PyObject *names,
 				/* Replace JUMP_* to a RETURN into just a RETURN */
 				tgtrawopcode = codestr[tgt];
 				if (UNCONDITIONAL_JUMP16(rawopcode) &&
-					tgtrawopcode == CONVERT(RETURN_VALUE)) {
-					codestr[i] = CONVERT(RETURN_VALUE);
-					codestr[i + 1] = CONVERT(NOP);
-					break;
-				}
+                   (tgtrawopcode == CONVERT(RETURN_VALUE) ||
+                    EXTRACTOP(tgtrawopcode) == RETURN_CONST) ||
+                    tgtrawopcode == CONVERT(RETURN_LOCALS)) {
+				    codestr[i] = tgtrawopcode;
+				    codestr[i + 1] = CONVERT(NOP);
+				    break;
+                }
 				tgtopcode = EXTRACTOP(tgtrawopcode);
 				if (UNCONDITIONAL_JUMP16(tgtrawopcode)) {
 					GETWORD(codestr + tgt + 1, oparg);
@@ -1055,14 +1021,10 @@ PyCode_Optimize(PyObject *code, PyObject* consts, PyObject *names,
                         load_global_superinstructions(codestr, blocks, i);
 						break;
 
-					case CALL_FUNCTION:
-					case CALL_FUNCTION_VAR:
-					case CALL_FUNCTION_KW:
-					case CALL_FUNCTION_VAR_KW:
+					case QUICK_CALL_FUNCTION:
 						if (codestr[i + 1] == CONVERT(POP_TOP) &&
 							ISBASICBLOCK(i, 2))
-							if (opcode == CALL_FUNCTION &&
-								EXTRACTOP(codestr[i + 2]) == LOAD_CONST &&
+							if (EXTRACTOP(codestr[i + 2]) == LOAD_CONST &&
 								codestr[i + 3] == CONVERT(RETURN_VALUE) &&
 								ISBASICBLOCK(i, 4)) {
 #ifdef WPY_CALL_PROC_RETURN_CONST
@@ -1075,14 +1037,24 @@ PyCode_Optimize(PyObject *code, PyObject* consts, PyObject *names,
 							}
 #ifdef WPY_CALL_PROCEDURE
 							else {
-								opcode += 4;
-								codestr[i] = PACKOPCODE(opcode, oparg);
+								codestr[i] = PACKOPCODE(QUICK_CALL_PROCEDURE, oparg);
 								codestr[i + 1] = CONVERT(NOP);
 							}
 #endif
 						break;
 
-#if defined(WPY_REMOVE_UNREACHABLE_CODE) && defined(WPY_RETURN_CONST)
+#ifdef WPY_CALL_PROCEDURE
+                    case CALL_SUB:
+						if (codestr[i + 2] == CONVERT(POP_TOP) &&
+                            ISBASICBLOCK(i, 3)) {
+							oparg |= 4;
+							codestr[i] = PACKOPCODE(opcode, oparg);
+							codestr[i + 2] = CONVERT(NOP);
+                        }
+						break;
+#endif
+
+#ifdef WPY_REMOVE_UNREACHABLE_CODE
 					case RETURN_CONST:
 						remove_unreachable_code(codestr, codelen, blocks, i);
 						break;
@@ -1154,16 +1126,14 @@ PyCode_Optimize(PyObject *code, PyObject* consts, PyObject *names,
 					case SETUP_EXCEPT:
 					case SETUP_FINALLY:
 					case CONTINUE_LOOP:
-					case FOR_ITER:
-					case LIST_APPEND_LOOP: {
+					case FOR_ITER: {
 						int tgtrawopcode, tgtopcode;
 
 						oparg = EXTRACTARG(rawopcode);
 						tgt = GETJUMPTARGET8(opcode, oparg, i + 1);
 #ifdef WPY_REMOVE_UNREACHABLE_CODE
 						if (UNCONDITIONAL_JUMP8(opcode) ||
-							opcode == CONTINUE_LOOP ||
-							opcode == LIST_APPEND_LOOP)
+							opcode == CONTINUE_LOOP)
 							if (remove_unreachable_code(codestr, codelen,
 														blocks, i) -
 								codestr == tgt && opcode == JUMP_FORWARD) {
@@ -1174,8 +1144,10 @@ PyCode_Optimize(PyObject *code, PyObject* consts, PyObject *names,
 
 						tgtrawopcode = codestr[tgt];
 						if (UNCONDITIONAL_JUMP8(opcode) &&
-							tgtrawopcode == CONVERT(RETURN_VALUE)) {
-							codestr[i] = CONVERT(RETURN_VALUE);
+							(tgtrawopcode == CONVERT(RETURN_VALUE) ||
+                             EXTRACTOP(tgtrawopcode) == RETURN_CONST) ||
+                             tgtrawopcode == CONVERT(RETURN_LOCALS)) {
+							codestr[i] = tgtrawopcode;
 							break;
 						}
 						tgtopcode = EXTRACTOP(tgtrawopcode);

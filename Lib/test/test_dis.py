@@ -12,11 +12,11 @@ def _f(a):
     return 1
 
 dis_f = """\
- %-4d         0 LOAD_FAST                     0 (a)
+ %-4d         0 LOAD_FAST                      0 (a)
               1 PRINT_ITEM
               2 PRINT_NEWLINE
 
- %-4d         3 RETURN_CONST                  1 (1)
+ %-4d         3 RETURN_CONST                   1 (1)
 """%(_f.func_code.co_firstlineno + 1,
      _f.func_code.co_firstlineno + 2)
 
@@ -27,15 +27,15 @@ def bug708901():
         pass
 
 dis_bug708901 = """\
- %-4d         0 LOAD_GLOBAL                   0 (range)
-              1 LOAD_CONSTS                   1 ((1, 10))
-              2 CALL_FUNCTION                 2
+ %-4d         0 LOAD_GLOBAL                    0 (range)
+              1 LOAD_CONSTS                    1 ((1, 10))
+              2 QUICK_CALL_FUNCTION            2 (2 0)
               3 GET_ITER
-        >>    4 FOR_ITER                      2 (to 7)
-              5 STORE_FAST                    0 (res)
+        >>    4 FOR_ITER                       2 (to 7)
+              5 STORE_FAST                     0 (res)
 
- %-4d         6 JUMP_ABSOLUTE                 4
-        >>    7 RETURN_CONST                  0 (None)
+ %-4d         6 JUMP_ABSOLUTE                  4
+        >>    7 RETURN_CONST                   0 (None)
 """%(bug708901.func_code.co_firstlineno + 1,
      bug708901.func_code.co_firstlineno + 3)
 
@@ -46,40 +46,32 @@ def bug1333982(x=[]):
     pass
 
 dis_bug1333982 = """\
- %-4d         0 LOAD_CONST                    1 (0)
-              1 JUMP_IF_TRUE                 14 (to 16)
-              2 LOAD_GLOBAL                   0 (AssertionError)
-              3 BUILD_LIST                    0
+ %-4d         0 LOAD_CONST                     1 (0)
+              1 JUMP_IF_TRUE                   14 (to 16)
+              2 LOAD_GLOBAL                    0 (AssertionError)
+              3 BUILD_LIST                     0
               4 DUP_TOP
-              5 STORE_FAST                    1 (_[1])
-              6 FAST_UNOP                       get_iter x
+              5 STORE_FAST                     1 (_[1])
+              6 FAST_UNOP                      0 (x) 6 (get_iter)
+        >>    8 FOR_ITER                       4 (to 13)
+              9 STORE_FAST                     2 (s)
+             10 LOAD_FAST                      1 (_[1])
+             11 LOAD_FAST                      2 (s)
+             12 LIST_APPEND_LOOP               8
+        >>   13 DELETE_FAST                    1 (_[1])
 
-        >>    8 FOR_ITER                      4 (to 13)
-              9 STORE_FAST                    2 (s)
-             10 LOAD_FAST                     1 (_[1])
-             11 LOAD_FAST                     2 (s)
-             12 LIST_APPEND_LOOP              8
-        >>   13 DELETE_FAST                   1 (_[1])
-
- %-4d        14 CONST_ADD                     2 (1)
+ %-4d        14 CONST_ADD                      2 (1)
              15 RAISE_2
 
- %-4d   >>   16 RETURN_CONST                  0 (None)
+ %-4d   >>   16 RETURN_CONST                   0 (None)
 """%(bug1333982.func_code.co_firstlineno + 1,
      bug1333982.func_code.co_firstlineno + 2,
      bug1333982.func_code.co_firstlineno + 3)
 
-_BIG_LINENO_FORMAT_PEEPHOLE = """\
-%3d           0 LOAD_GLOBAL                   0 (spam)
+_BIG_LINENO_FORMAT = """\
+%3d           0 LOAD_GLOBAL                    0 (spam)
               1 POP_TOP
-              2 RETURN_CONST                  0 (None)
-"""
-
-_BIG_LINENO_FORMAT_NO_PEEPHOLE = """\
-%3d           0 LOAD_GLOBAL                   0 (spam)
-              1 POP_TOP
-              2 LOAD_CONST                    0 (None)
-              3 RETURN_VALUE
+              2 RETURN_CONST                   0 (None)
 """
 
 class DisTests(unittest.TestCase):
@@ -104,11 +96,15 @@ class DisTests(unittest.TestCase):
     def test_opmap(self):
         self.assertEqual(dis.opmap["STOP_CODE"], (5, 1))
         self.assertEqual(dis.opmap["LOAD_FAST"], 7)
-        self.assertEqual(dis.opmap["LOAD_CONST"] in dis.hasconst, True)
-        self.assertEqual(dis.opmap["STORE_NAME"] in dis.hasname, True)
 
     def test_opname(self):
         self.assertEqual(dis.opname[dis.opmap["LOAD_FAST"]], "LOAD_FAST")
+
+    def test_opargs(self):
+        self.assertEqual(dis.opargs[dis.opmap["STOP_CODE"]], ())
+        self.assertEqual(dis.opargs[dis.opmap["LOAD_FAST"]], (dis.arg_local, ))
+        self.assertEqual(dis.opargs[dis.opmap["LOAD_CONST"]], (dis.arg_const, ))
+        self.assertEqual(dis.opargs[dis.opmap["STORE_NAME"]], (dis.arg_name, ))
 
     def test_boundaries(self):
         self.assertEqual(dis.opmap["EXTENDED_ARG16"], dis.EXTENDED_ARG16)
@@ -135,16 +131,13 @@ class DisTests(unittest.TestCase):
             return namespace['foo']
 
         # Test all small ranges
-        for i in xrange(1, 254):
-            expected = _BIG_LINENO_FORMAT_PEEPHOLE % (i + 2)
-            self.do_disassembly_test(func(i), expected)
-        for i in xrange(254, 300):
-            expected = _BIG_LINENO_FORMAT_NO_PEEPHOLE % (i + 2)
+        for i in xrange(1, 300):
+            expected = _BIG_LINENO_FORMAT % (i + 2)
             self.do_disassembly_test(func(i), expected)
 
         # Test some larger ranges too
         for i in xrange(300, 5000, 10):
-            expected = _BIG_LINENO_FORMAT_NO_PEEPHOLE % (i + 2)
+            expected = _BIG_LINENO_FORMAT % (i + 2)
             self.do_disassembly_test(func(i), expected)
 
 def test_main():

@@ -2115,7 +2115,7 @@ pattern_findall(PatternObject* self, PyObject* args, PyObject* kw)
             break;
         }
 
-        status = PyList_Append(list, item);
+        status = _Py_list_append(list, item);
         Py_DECREF(item);
         if (status < 0)
             goto error;
@@ -2231,7 +2231,7 @@ pattern_split(PatternObject* self, PyObject* args, PyObject* kw)
             );
         if (!item)
             goto error;
-        status = PyList_Append(list, item);
+        status = _Py_list_append(list, item);
         Py_DECREF(item);
         if (status < 0)
             goto error;
@@ -2241,7 +2241,7 @@ pattern_split(PatternObject* self, PyObject* args, PyObject* kw)
             item = state_getslice(&state, i+1, string, 0);
             if (!item)
                 goto error;
-            status = PyList_Append(list, item);
+            status = _Py_list_append(list, item);
             Py_DECREF(item);
             if (status < 0)
                 goto error;
@@ -2259,7 +2259,7 @@ pattern_split(PatternObject* self, PyObject* args, PyObject* kw)
         );
     if (!item)
         goto error;
-    status = PyList_Append(list, item);
+    status = _Py_list_append(list, item);
     Py_DECREF(item);
     if (status < 0)
         goto error;
@@ -2376,7 +2376,7 @@ pattern_subx(PatternObject* self, PyObject* ptemplate, PyObject* string,
             item = PySequence_GetSlice(string, i, b);
             if (!item)
                 goto error;
-            status = PyList_Append(list, item);
+            status = _Py_list_append(list, item);
             Py_DECREF(item);
             if (status < 0)
                 goto error;
@@ -2408,7 +2408,7 @@ pattern_subx(PatternObject* self, PyObject* ptemplate, PyObject* string,
 
         /* add to list */
         if (item != Py_None) {
-            status = PyList_Append(list, item);
+            status = _Py_list_append(list, item);
             Py_DECREF(item);
             if (status < 0)
                 goto error;
@@ -2431,7 +2431,7 @@ next:
         item = PySequence_GetSlice(string, i, state.endpos);
         if (!item)
             goto error;
-        status = PyList_Append(list, item);
+        status = _Py_list_append(list, item);
         Py_DECREF(item);
         if (status < 0)
             goto error;

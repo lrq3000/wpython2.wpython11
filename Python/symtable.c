@@ -834,14 +834,14 @@ static int
 symtable_enter_block(struct symtable *st, identifier name, _Py_block_ty block, 
 		     void *ast, int lineno)
 {
-	PySTEntryObject *prev = NULL;
+	PySTEntryObject *prev;
 
-	if (st->st_cur) {
-		prev = st->st_cur;
-		if (PyList_Append(st->st_stack, (PyObject *)st->st_cur) < 0) {
+	prev = st->st_cur;
+	if (prev) {
+		if (PyList_Append(st->st_stack, (PyObject *)prev) < 0) {
 			return 0;
 		}
-		Py_DECREF(st->st_cur);
+		Py_DECREF(prev);
 	}
 	st->st_cur = ste_new(st, name, block, ast, lineno);
 	if (st->st_cur == NULL)

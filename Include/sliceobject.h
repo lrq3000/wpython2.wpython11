@@ -38,6 +38,11 @@ PyAPI_FUNC(int) PySlice_GetIndicesEx(PySliceObject *r, Py_ssize_t length,
 				    Py_ssize_t *start, Py_ssize_t *stop, 
 				    Py_ssize_t *step, Py_ssize_t *slicelength);
 
+/* Defined for compile.c in wordcode-based Pythons. */
+
+long _Py_slice_relaxed_hash(PySliceObject *v);
+int _Py_slice_strict_equal(PySliceObject *vs, PySliceObject *ws);
+
 #ifdef __cplusplus
 }
 #endif
